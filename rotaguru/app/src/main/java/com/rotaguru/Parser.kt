@@ -89,7 +89,8 @@ object Parser {
                 val other = bubbles.firstOrNull { it !== trip }
                 if (other != null) {
                     pickupMin = other.first
-                    if (pickup == null) pickup = other.second
+                    // km exato da rota até o passageiro (mapa) tem prioridade sobre o "~x km" arredondado
+                    pickup = other.second
                 }
             } else {
                 val kms = items.mapNotNull { ONLY_KM.find(it.text)?.let { m -> num(m.groupValues[1]) } }

@@ -243,8 +243,12 @@ class Overlay(private val svc: AccessibilityService) {
             sb.append(t)
             sb.setSpan(ForegroundColorSpan(c), st, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
-        r.totalKm?.let { add((if (r.estimated) "~" else "") + String.format(BR, "%.0f km total", it), MUTED) }
-        r.offer.pickupKm?.let { add("busca " + String.format(BR, "%.1f", it), Evaluator.pickupColor(it, prefs)) }
+        Evaluator.totalKmText(r)?.let { add(it, MUTED) }
+        // onde era "busca": tempo total (busca + viagem) e tempo até o destino final.
+        // Na lista o app não mostra tempos, então mantém a distância de busca.
+        val timeTxt = Evaluator.timeText(r)
+        if (timeTxt != null) add(timeTxt, 0xFFFFFFFF.toInt())
+        else r.offer.pickupKm?.let { add("busca " + String.format(BR, "%.1f", it), Evaluator.pickupColor(it, prefs)) }
         r.offer.rating?.let { add("★" + String.format(BR, "%.2f", it), Evaluator.ratingColor(it)) }
         r.rph?.let { add(String.format(BR, "R$ %.0f/h", it), MUTED) }
         val rowC = tv(sb, 11f, MUTED).apply {

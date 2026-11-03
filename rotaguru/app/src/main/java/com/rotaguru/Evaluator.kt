@@ -35,7 +35,9 @@ class Result(
     val fuel: Double? = null,  // gasto estimado com gasolina (busca + corrida)
     val net: Double? = null,   // ganho líquido = preço - gasolina
     val suggest: Double? = null, // valor sugerido p/ pedir ao passageiro (null = preço já atende o mínimo)
-    val totalKm: Double? = null  // km total = busca + corrida
+    val totalKm: Double? = null,  // km total = busca + corrida
+    val totalMin: Double? = null, // tempo total = busca + viagem (null se algum tempo for desconhecido)
+    val destMin: Double? = null   // tempo da viagem até o destino final
 )
 
 object Evaluator {
@@ -70,7 +72,21 @@ object Evaluator {
             val need = Math.round(p.minRpk.toDouble() * it * 100) / 100.0
             if (need > 0 && o.price < need - 0.005) need else null
         }
-        return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total)
+        val totalMin = if (tm != null && pm != null) tm + pm else null
+        return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total, totalMin, tm)
+    }
+
+    /** "44 min total · 38 min destino" (só o que for conhecido); null se não há tempos. */
+    fun timeText(r: Result): String? {
+        val parts = mutableListOf<String>()
+        r.totalMin?.let { parts.add(String.format(BR, "%.0f min total", it)) }
+        r.destMin?.let { parts.add(String.format(BR, "%.0f min destino", it)) }
+        return if (parts.isEmpty()) null else parts.joinToString("  ·  ")
+    }
+
+    /** km total com 1 casa (busca + corrida). */
+    fun totalKmText(r: Result): String? = r.totalKm?.let {
+        (if (r.estimated) "~" else "") + String.format(BR, "%.1f km total", it)
     }
 
     fun best(results: List<Result>): Result? =
