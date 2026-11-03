@@ -26,15 +26,21 @@ class RouteService : AccessibilityService() {
      */
     private val tick = object : Runnable {
         override fun run() {
-            val now = SystemClock.uptimeMillis()
-            if (now - lastEvent < 60_000 || overlay.isShowing) scan()
+            try {
+                val now = SystemClock.uptimeMillis()
+                if (now - lastEvent < 60_000 || overlay.isShowing) scan()
+            } catch (_: Throwable) {
+            }
             handler.postDelayed(this, 900)
         }
     }
 
     override fun onServiceConnected() {
+        super.onServiceConnected()
         prefs = Prefs(this)
         overlay = Overlay(this)
+        handler.removeCallbacks(tick)
+        ticking = false
         if (!ticking) {
             ticking = true
             handler.postDelayed(tick, 900)
@@ -46,7 +52,10 @@ class RouteService : AccessibilityService() {
         lastEvent = SystemClock.uptimeMillis()
         if (scheduled) return
         scheduled = true
-        handler.postDelayed({ scheduled = false; scan() }, 200)
+        handler.postDelayed({
+            scheduled = false
+            try { scan() } catch (_: Throwable) {}
+        }, 200)
     }
 
     /** Janela ativa; se o sistema não entregar, procura entre as janelas de aplicativo. */
@@ -69,8 +78,8 @@ class RouteService : AccessibilityService() {
             return
         }
         val results = offers.map { Evaluator.evaluate(it, prefs) }
-        overlay.show(results)
-        maybeAutoAccept(results)
+        runCatching { overlay.show(results) }
+        runCatching { maybeAutoAccept(results) }
     }
 
     private fun maybeAutoAccept(results: List<Result>) {
