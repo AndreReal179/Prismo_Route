@@ -11,7 +11,7 @@ enum class Level(val label: String, val color: Int) {
 
 class Offer(
     val price: Double,
-    val rpkApp: Double?,       // "R$ 1,4/km" mostrado pelo app (já arredondado)
+    val rpkApp: Double?,       // "R$ 1,4/km" mostrado pelo app (já arredondado; inclui a busca)
     val pickupKm: Double?,     // "~2,0 km" até o passageiro
     val tripKm: Double?,       // km da corrida (só na tela de detalhe)
     val tripMin: Double?,
@@ -34,19 +34,22 @@ class Result(
     val rph: Double?,          // R$ por hora (só se tempos conhecidos)
     val fuel: Double? = null,  // gasto estimado com gasolina (busca + corrida)
     val net: Double? = null,   // ganho líquido = preço - gasolina
-    val suggest: Double? = null // valor sugerido p/ pedir ao passageiro (null = preço já atende o mínimo)
+    val suggest: Double? = null, // valor sugerido p/ pedir ao passageiro (null = preço já atende o mínimo)
+    val totalKm: Double? = null  // km total = busca + corrida
 )
 
 object Evaluator {
 
     fun evaluate(o: Offer, p: Prefs): Result {
-        val trip: Double? = o.tripKm ?: o.rpkApp?.takeIf { it > 0 }?.let { o.price / it }
+        val pickupKm = o.pickupKm ?: 0.0
+        // O R$/km mostrado pelo app de corridas JÁ inclui a busca: preço / (R$/km) = km TOTAL.
+        // Na tela de detalhe temos o km exato da corrida (mapa) e somamos a busca.
+        val total: Double? = o.tripKm?.let { it + pickupKm }
+            ?: o.rpkApp?.takeIf { it > 0 }?.let { o.price / it }
+        val trip: Double? = o.tripKm ?: total?.let { (it - pickupKm).coerceAtLeast(0.0) }
         val estimated = o.tripKm == null
-        val pickup = if (p.includePickup) (o.pickupKm ?: 0.0) else 0.0
-        val eff: Double? = trip?.let {
-            val total = it + pickup
-            if (total > 0) o.price / total else null
-        }
+        val base: Double? = if (p.includePickup) total else trip
+        val eff: Double? = base?.let { if (it > 0) o.price / it else null }
         val level: Level? = eff?.let {
             when {
                 it >= p.otimo -> Level.OTIMO
@@ -58,16 +61,16 @@ object Evaluator {
         val pm = o.pickupMin
         val rph = if (tm != null && pm != null && tm + pm > 0) o.price / ((tm + pm) / 60.0) else null
 
-        // gasolina: sempre conta a busca + a corrida, independente da opção de classificação
-        val fuel: Double? = trip?.let { (it + (o.pickupKm ?: 0.0)) / p.kmPerLiter.coerceAtLeast(0.1f) * p.fuelPrice }
+        // gasolina: km total (busca + corrida)
+        val fuel: Double? = total?.let { it / p.kmPerLiter.coerceAtLeast(0.1f) * p.fuelPrice }
         val net = fuel?.let { o.price - it }
 
-        // sugestão: preço que atinge o R$/km mínimo, arredondado para cima de R$ 0,50 em R$ 0,50
-        val suggest: Double? = trip?.let {
-            val need = p.minRpk.toDouble() * (it + pickup)
-            if (need > 0 && o.price < need - 0.005) Math.ceil(need * 2) / 2 else null
+        // sugestão: km total (busca + corrida) x R$/km mínimo (ex.: 18 km x 1,70 = R$ 30,60)
+        val suggest: Double? = total?.let {
+            val need = Math.round(p.minRpk.toDouble() * it * 100) / 100.0
+            if (need > 0 && o.price < need - 0.005) need else null
         }
-        return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest)
+        return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total)
     }
 
     fun best(results: List<Result>): Result? =
@@ -119,7 +122,7 @@ object Evaluator {
     /** Versão curta para o selo em cima de cada card. */
     fun compact(r: Result): String {
         val parts = mutableListOf<String>()
-        r.tripUsed?.let { parts.add((if (r.estimated) "~" else "") + String.format(BR, "%.0f km", it)) }
+        r.totalKm?.let { parts.add((if (r.estimated) "~" else "") + String.format(BR, "%.0f km", it)) }
         r.offer.pickupKm?.let { parts.add("busca " + String.format(BR, "%.1f", it)) }
         r.rph?.let { parts.add(String.format(BR, "R$ %.0f/h", it)) }
         r.offer.rating?.let { parts.add("★" + String.format(BR, "%.2f", it)) }
@@ -130,7 +133,7 @@ object Evaluator {
 
     fun detail(r: Result): String {
         val parts = mutableListOf<String>()
-        r.tripUsed?.let { parts.add((if (r.estimated) "corrida ~" else "corrida ") + km(it)) }
+        r.totalKm?.let { parts.add((if (r.estimated) "total ~" else "total ") + km(it)) }
         r.offer.pickupKm?.let { parts.add("busca " + km(it)) }
         r.rph?.let { parts.add(String.format(BR, "R$ %.0f/h", it)) }
         r.offer.rating?.let { parts.add("★ " + String.format(BR, "%.2f", it)) }

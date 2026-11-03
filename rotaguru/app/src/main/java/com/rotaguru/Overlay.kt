@@ -243,7 +243,7 @@ class Overlay(private val svc: AccessibilityService) {
             sb.append(t)
             sb.setSpan(ForegroundColorSpan(c), st, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
-        r.tripUsed?.let { add((if (r.estimated) "~" else "") + String.format(BR, "%.0f km", it), MUTED) }
+        r.totalKm?.let { add((if (r.estimated) "~" else "") + String.format(BR, "%.0f km total", it), MUTED) }
         r.offer.pickupKm?.let { add("busca " + String.format(BR, "%.1f", it), Evaluator.pickupColor(it, prefs)) }
         r.offer.rating?.let { add("★" + String.format(BR, "%.2f", it), Evaluator.ratingColor(it)) }
         r.rph?.let { add(String.format(BR, "R$ %.0f/h", it), MUTED) }
