@@ -42,7 +42,7 @@ class RouteService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        if (e == null || e.packageName == packageName) return
+        if (e == null || e.packageName == packageName || !::overlay.isInitialized) return
         lastEvent = SystemClock.uptimeMillis()
         if (scheduled) return
         scheduled = true
@@ -111,7 +111,7 @@ class RouteService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        overlay.remove()
+        if (::overlay.isInitialized) overlay.remove()
     }
 
     override fun onDestroy() {
