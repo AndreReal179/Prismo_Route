@@ -76,9 +76,13 @@ class Overlay(private val svc: AccessibilityService) {
         handler.postDelayed(hideRunnable, 1200)
     }
 
+    /** Chamado quando o painel sai da tela (o botão flutuante volta ao estado neutro). */
+    var onHidden: (() -> Unit)? = null
+
     fun remove() {
         hidePending = false
         handler.removeCallbacks(hideRunnable)
+        if (isShowing) runCatching { onHidden?.invoke() }
         bar?.let { runCatching { wm.removeView(it) } }
         layer?.let { runCatching { wm.removeView(it) } }
         bar = null
@@ -125,10 +129,12 @@ class Overlay(private val svc: AccessibilityService) {
         val multi = last.size > 1
         val width = svc.resources.displayMetrics.widthPixels - dp(66) - dp(40)
         for (r in last) {
-            val p = panel(r, r === best && multi)
-            val lp = FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT,
+            val route = r.offer.route
+            val p = if (route) routePanel(r, r === best && multi) else panel(r, r === best && multi)
+            val w = if (route) svc.resources.displayMetrics.widthPixels - dp(40) else width
+            val lp = FrameLayout.LayoutParams(w, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.START).apply {
-                leftMargin = dp(66)
+                leftMargin = if (route) dp(20) else dp(66)
                 topMargin = (r.offer.headTop ?: 0) - dp(3)
             }
             f.addView(p, lp)
@@ -301,6 +307,57 @@ class Overlay(private val svc: AccessibilityService) {
                 .apply { leftMargin = dp(8); rightMargin = dp(8) })
             addView(right, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+    }
+
+    /**
+     * Painel compacto p/ cards de "Rotas disponíveis": só cobre a linha de preço/km do card
+     * (a camada não recebe toques, então "Gerar Rota" continua funcionando normalmente).
+     */
+    private fun routePanel(r: Result, isBest: Boolean): View {
+        val color = r.level?.color ?: 0xFF6B7280.toInt()
+        val bright = when (r.level) {
+            Level.OTIMO -> 0xFF4CD27C.toInt()
+            Level.MEDIO -> 0xFFFFB300.toInt()
+            else -> 0xFFEF5350.toInt()
+        }
+        val row1 = LinearLayout(svc).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(chip(r.level?.label ?: "?", color, 0xFFFFFFFF.toInt()))
+            if (isBest) addView(tv(" ★", 12f, GOLD, true))
+            addView(tv("  " + Evaluator.perKm(r), 17f, bright, true))
+            addView(View(svc), LinearLayout.LayoutParams(0, 1, 1f))
+            if (r.net != null) {
+                addView(tv(Evaluator.money(r.net) + " líq.", 13f, Evaluator.netColor(r), true))
+            }
+        }
+        val sb = SpannableStringBuilder()
+        fun add(t: String) {
+            if (sb.isNotEmpty()) sb.append("  ·  ")
+            sb.append(t)
+        }
+        r.totalKm?.let { add(String.format(BR, "%.2f km", it)) }
+        r.totalMin?.let { add(String.format(BR, "%.0f min", it)) }
+        add(Evaluator.money(r.offer.price))
+        r.fuel?.let { add("gasolina " + Evaluator.money(it)) }
+        r.offer.stops?.let { add(it) }
+        val row2 = tv(sb, 10.5f, MUTED).apply {
+            ellipsize = TextUtils.TruncateAt.END
+            setAutoSizeTextTypeUniformWithConfiguration(7, 11, 1, TypedValue.COMPLEX_UNIT_SP)
+        }
+        return LinearLayout(svc).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(blend(BASE, color, 0.30f), BASE, BASE)
+            ).apply {
+                cornerRadius = dpf(12f)
+                if (isBest) setStroke(dp(2), GOLD) else setStroke(dp(1), blend(BASE, color, 0.65f))
+            }
+            addView(row1)
+            addView(row2, lpTop(1))
         }
     }
 

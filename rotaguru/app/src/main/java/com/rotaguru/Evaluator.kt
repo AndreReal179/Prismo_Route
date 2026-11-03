@@ -22,7 +22,9 @@ class Offer(
     val tapX: Int = 0,
     val tapY: Int = 0,
     val headTop: Int? = null,
-    val headBottom: Int? = null   // y (tela) da base da linha "R$ x/km" do card, p/ posicionar o selo
+    val headBottom: Int? = null,  // y (tela) da base da linha "R$ x/km" do card, p/ posicionar o selo
+    val route: Boolean = false,   // true = card de "Rotas disponíveis" (coletas + entregas)
+    val stops: String? = null     // ex.: "2 coletas · 3 entregas"
 )
 
 class Result(

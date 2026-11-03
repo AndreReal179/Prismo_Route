@@ -38,8 +38,8 @@ class RouteService : AccessibilityService() {
                 // app em primeiro plano agora (não depende só de eventos)
                 val ap = rootInActiveWindow?.packageName?.toString().orEmpty()
                 if (ap.isNotEmpty() && ap != packageName && !ignoredPkg(ap)) lastPkg = ap
-                val ride = prefs.ridePkg
-                fab.setVisible(ride.isEmpty() || lastPkg == ride)
+                val rides = prefs.ridePkgs
+                fab.setVisible(rides.isEmpty() || lastPkg in rides)
             } catch (_: Throwable) {
             }
             handler.postDelayed(this, 900)
@@ -51,6 +51,7 @@ class RouteService : AccessibilityService() {
         prefs = Prefs(this)
         overlay = Overlay(this)
         fab = Fab(this)
+        overlay.onHidden = { fab.update(null) }
         handler.removeCallbacks(tick)
         ticking = false
         if (!ticking) {
@@ -93,18 +94,14 @@ class RouteService : AccessibilityService() {
             overlay.hideSoon()
             return
         }
-        val rp = prefs.ridePkg
-        if (rp.isNotEmpty() && root.packageName?.toString() != rp) {   // outro app em primeiro plano
-            overlay.remove()
-            return
-        }
         val offers = runCatching { Parser.parse(root) }.getOrDefault(emptyList())
         if (offers.isEmpty()) {
             overlay.hideSoon()
             return
         }
-        root.packageName?.toString()?.let { if (it != prefs.ridePkg) prefs.ridePkg = it }
+        root.packageName?.toString()?.let { prefs.addRidePkg(it) }
         val results = offers.map { Evaluator.evaluate(it, prefs) }
+        fab.update(Evaluator.best(results))
         runCatching { overlay.show(results) }
         runCatching { maybeAutoAccept(results) }
     }
@@ -115,6 +112,7 @@ class RouteService : AccessibilityService() {
         if (now - lastClick < 3000) return
 
         val candidate = results
+            .filter { !it.offer.route }   // "Rotas disponíveis": nunca toca em "Gerar Rota" sozinho
             .filter { (it.effRpk ?: 0.0) >= prefs.autoMinRpk }
             .filter { r -> r.offer.rating?.let { it >= prefs.minRating } ?: true }
             .maxByOrNull { it.effRpk ?: 0.0 } ?: return

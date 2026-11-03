@@ -27,6 +27,9 @@ object Parser {
         return t.toDoubleOrNull()
     }
 
+    // "R$ 11,08 • 2,96 km em 29 min"  (também "1 h 05 min")
+    private val ROUTE_HEAD = Regex("""R\$\s*([\d.,]+)\s*[•·|]\s*([\d.,]+)\s*km\s*em\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*min)?""", RegexOption.IGNORE_CASE)
+    private val ROUTE_LEG = Regex("""(Coleta|Entrega)s?\s*\(\s*([\d.,]+)\s*km\s*\)""", RegexOption.IGNORE_CASE)
     private val ONLY_MIN = Regex("""^\s*(\d+)\s*min\.?\s*$""", RegexOption.IGNORE_CASE)
 
     /** hidden = true: inclui também nós "não visíveis" e lê text + contentDescription (balões do mapa). */
@@ -123,6 +126,10 @@ object Parser {
             )
         }
 
+        // ---------- Rotas disponíveis (coletas + entregas) ----------
+        val routes = parseRoutes(items)
+        if (routes.isNotEmpty()) return routes
+
         // ---------- Tela de lista ----------
         val heads = items.filter { RPK.containsMatchIn(it.text) }.sortedBy { it.rect.top }
         val offers = mutableListOf<Offer>()
@@ -147,6 +154,72 @@ object Parser {
                     tapY = (h.rect.top + cardBottom) / 2,
                     headTop = h.rect.top,
                     headBottom = h.rect.bottom
+                )
+            )
+        }
+        return offers
+    }
+
+    /** Agrupa os textos da mesma linha (mesmo y) e junta da esquerda p/ a direita. */
+    private fun lines(items: List<T>): List<Triple<String, Int, Int>> {
+        val sorted = items.sortedWith(compareBy({ it.rect.top }, { it.rect.left }))
+        val out = mutableListOf<Triple<String, Int, Int>>()
+        var cur = mutableListOf<T>()
+        fun flush() {
+            if (cur.isEmpty()) return
+            val txt = cur.joinToString(" ") { it.text }.replace('\u00A0', ' ')
+            out.add(Triple(txt, cur.minOf { it.rect.top }, cur.maxOf { it.rect.bottom }))
+            cur = mutableListOf()
+        }
+        for (t in sorted) {
+            if (cur.isNotEmpty() && Math.abs(t.rect.top - cur[0].rect.top) > 18) flush()
+            cur.add(t)
+        }
+        flush()
+        return out
+    }
+
+    /**
+     * Tela "ROTAS DISPONÍVEIS": cada card tem "R$ preço • x km em N min" e várias linhas
+     * "Coleta (a km)" / "Entrega (b km)". Km total = o maior entre o km do cabeçalho e a soma das etapas.
+     */
+    private fun parseRoutes(items: List<T>): List<Offer> {
+        val ls = lines(items)
+        val heads = ls.filter { ROUTE_HEAD.containsMatchIn(it.first) }
+        if (heads.isEmpty()) return emptyList()
+        val offers = mutableListOf<Offer>()
+        heads.forEachIndexed { i, h ->
+            val m = ROUTE_HEAD.find(h.first)!!
+            val price = num(m.groupValues[1]) ?: return@forEachIndexed
+            val headKm = num(m.groupValues[2]) ?: return@forEachIndexed
+            val hh = m.groupValues[3].toDoubleOrNull() ?: 0.0
+            val mm = m.groupValues[4].toDoubleOrNull() ?: 0.0
+            val minutes = hh * 60 + mm
+            val bottom = heads.getOrNull(i + 1)?.second ?: Int.MAX_VALUE
+            var legKm = 0.0
+            var coletas = 0
+            var entregas = 0
+            for (l in ls) {
+                if (l.second <= h.second || l.second >= bottom) continue
+                for (lm in ROUTE_LEG.findAll(l.first)) {
+                    val km = num(lm.groupValues[2]) ?: continue
+                    legKm += km
+                    if (lm.groupValues[1].equals("Coleta", true)) coletas++ else entregas++
+                }
+            }
+            val total = maxOf(headKm, legKm)
+            fun plural(n: Int, one: String, many: String) = if (n == 1) "1 $one" else "$n $many"
+            val stops = listOf(
+                if (coletas > 0) plural(coletas, "coleta", "coletas") else null,
+                if (entregas > 0) plural(entregas, "entrega", "entregas") else null
+            ).filterNotNull().joinToString(" · ").ifEmpty { null }
+            offers.add(
+                Offer(
+                    price = price, rpkApp = null, pickupKm = null,
+                    tripKm = total, tripMin = if (minutes > 0) minutes else null, pickupMin = if (minutes > 0) 0.0 else null,
+                    rating = null,
+                    headTop = h.second, headBottom = h.third,
+                    route = true, stops = stops
                 )
             )
         }

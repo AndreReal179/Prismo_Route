@@ -63,10 +63,18 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("fabY", -1)
         set(v) { sp.edit().putInt("fabY", v).apply() }
 
-    /** Pacote do app de corridas (descoberto ao ler a primeira oferta) */
+    /** Pacotes dos apps de corridas/rotas (descobertos ao ler a primeira oferta de cada um), separados por "|" */
     var ridePkg: String
         get() = sp.getString("ridePkg", "") ?: ""
         set(v) { sp.edit().putString("ridePkg", v).apply() }
+
+    val ridePkgs: Set<String>
+        get() = ridePkg.split("|").filter { it.isNotEmpty() }.toSet()
+
+    fun addRidePkg(p: String) {
+        val cur = ridePkgs
+        if (p.isNotEmpty() && p !in cur) ridePkg = (cur + p).joinToString("|")
+    }
 
     /** Busca até este valor (km) = verde */
     var pickupGood: Float

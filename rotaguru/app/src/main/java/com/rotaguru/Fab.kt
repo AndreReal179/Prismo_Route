@@ -1,15 +1,22 @@
 package com.rotaguru
 
 import android.accessibilityservice.AccessibilityService
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.util.Locale
@@ -26,7 +33,10 @@ class Fab(private val svc: AccessibilityService) {
     private val BR = Locale("pt", "BR")
     private val density = svc.resources.displayMetrics.density
 
-    private var button: TextView? = null
+    private var button: FrameLayout? = null     // janela (um pouco maior p/ a animação não cortar)
+    private var badge: TextView? = null         // o círculo visível
+    private var pulse: ObjectAnimator? = null
+    private var lastBest: Result? = null
     private var buttonLp: WindowManager.LayoutParams? = null
     private var menu: LinearLayout? = null
 
@@ -45,9 +55,76 @@ class Fab(private val svc: AccessibilityService) {
 
     fun remove() {
         closeMenu()
+        stopPulse()
         button?.let { runCatching { wm.removeView(it) } }
         button = null
+        badge = null
         buttonLp = null
+    }
+
+    /** Mostra dentro do botão a melhor opção do momento (R$/km + classificação); null = nada na tela. */
+    fun update(best: Result?) {
+        lastBest = best
+        applyBest()
+    }
+
+    private fun applyBest() {
+        val b = badge ?: return
+        val r = lastBest
+        val eff = r?.effRpk
+        if (r == null || eff == null) {
+            stopPulse()
+            b.text = "R$"
+            b.textSize = 13f
+            b.setTextColor(GOLD)
+            b.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xEE0E1014.toInt())
+                setStroke(dp(2), GOLD)
+            }
+            return
+        }
+        val lvl = r.level ?: Level.RUIM
+        val col = when (lvl) {
+            Level.OTIMO -> 0xFF1FB45A.toInt()
+            Level.MEDIO -> 0xFFEF8F00.toInt()
+            Level.RUIM -> 0xFFC62828.toInt()
+        }
+        val sb = SpannableStringBuilder(String.format(BR, "%.2f", eff))
+        val st = sb.length
+        sb.append("\n").append(lvl.label)
+        sb.setSpan(RelativeSizeSpan(0.58f), st, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        b.text = sb
+        b.textSize = 14f
+        b.setTextColor(0xFFFFFFFF.toInt())
+        b.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(col)
+            setStroke(dp(2), if (lvl == Level.OTIMO) 0xFFFFFFFF.toInt() else 0x88FFFFFF.toInt())
+        }
+        if (lvl == Level.OTIMO) startPulse() else stopPulse()
+    }
+
+    private fun startPulse() {
+        if (pulse?.isRunning == true) return
+        val v = badge ?: return
+        pulse = ObjectAnimator.ofPropertyValuesHolder(
+            v,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.2f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.2f)
+        ).apply {
+            duration = 450
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            start()
+        }
+    }
+
+    private fun stopPulse() {
+        pulse?.cancel()
+        pulse = null
+        badge?.scaleX = 1f
+        badge?.scaleY = 1f
     }
 
     // ------------------------------------------------------------------ botão
@@ -58,23 +135,22 @@ class Fab(private val svc: AccessibilityService) {
         button?.let {
             if (it.isAttachedToWindow || android.os.SystemClock.uptimeMillis() - addedAt < 2500) return
             runCatching { wm.removeView(it) }
+            stopPulse()
             button = null
+            badge = null
             buttonLp = null
             menu?.let { m -> runCatching { wm.removeView(m) } }
             menu = null
         }
-        val size = dp(46)
-        val b = TextView(svc).apply {
-            text = "R$"
-            textSize = 13f
-            setTextColor(GOLD)
-            setTypeface(typeface, Typeface.BOLD)
+        val size = dp(62)
+        val circle = TextView(svc).apply {
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0xEE0E1014.toInt())
-                setStroke(dp(2), GOLD)
-            }
+            includeFontPadding = false
+            setPadding(0, 0, 0, 0)
+            setTypeface(typeface, Typeface.BOLD)
+        }
+        val b = FrameLayout(svc).apply {
+            addView(circle, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.CENTER))
         }
         val lp = WindowManager.LayoutParams(
             size, size,
@@ -84,7 +160,7 @@ class Fab(private val svc: AccessibilityService) {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = if (prefs.fabX >= 0) prefs.fabX else screenW() - size - dp(6)
+            x = if (prefs.fabX >= 0) prefs.fabX else screenW() - size
             y = if (prefs.fabY >= 0) prefs.fabY else dp(300)
         }
 
@@ -125,8 +201,10 @@ class Fab(private val svc: AccessibilityService) {
         }
         runCatching { wm.addView(b, lp) }.onSuccess {
             button = b
+            badge = circle
             buttonLp = lp
             addedAt = android.os.SystemClock.uptimeMillis()
+            applyBest()
         }
     }
 
@@ -147,7 +225,7 @@ class Fab(private val svc: AccessibilityService) {
         val blp = buttonLp ?: return
         val lp = m.layoutParams as? WindowManager.LayoutParams ?: return
         val w = menuWidth()
-        lp.x = if (blp.x + dp(23) > screenW() / 2) blp.x - w - dp(8) else blp.x + dp(54)
+        lp.x = if (blp.x + dp(31) > screenW() / 2) blp.x - w else blp.x + dp(62)
         lp.x = lp.x.coerceIn(0, (screenW() - w).coerceAtLeast(0))
         lp.y = blp.y.coerceIn(dp(24), (screenH() - dp(340)).coerceAtLeast(dp(24)))
         runCatching { wm.updateViewLayout(m, lp) }

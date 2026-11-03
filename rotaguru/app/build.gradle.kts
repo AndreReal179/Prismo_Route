@@ -11,8 +11,8 @@ android {
         applicationId = "com.rotaguru"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.6"
+        versionCode = 8
+        versionName = "1.7"
     }
 
     // Chave fixa (rotaguru.jks): todo APK sai com a MESMA assinatura, então dá para atualizar
