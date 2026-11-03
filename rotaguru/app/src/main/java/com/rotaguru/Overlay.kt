@@ -235,7 +235,7 @@ class Overlay(private val svc: AccessibilityService) {
         val rowA = LinearLayout(svc).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(chip(r.level?.label ?: "?", color, 0xFFFFFFFF.toInt()))
+            addView(chip(Evaluator.labelOf(r), Evaluator.labelColor(r), 0xFFFFFFFF.toInt()))
             // nota do passageiro junto da classificação (cor pela nota: verde / laranja / vermelho)
             r.offer.rating?.let {
                 addView(tv("  ★" + String.format(BR, "%.2f", it), 11f, Evaluator.ratingColor(it), true))
@@ -246,10 +246,6 @@ class Overlay(private val svc: AccessibilityService) {
         if (r.net != null) {
             net.append(Evaluator.money(r.net))
             net.setSpan(ForegroundColorSpan(Evaluator.netColor(r)), 0, net.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            val st = net.length
-            net.append(" líquido")
-            net.setSpan(RelativeSizeSpan(0.5f), st, net.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            net.setSpan(ForegroundColorSpan(MUTED), st, net.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         } else net.append("—")
         val rowB = tv(net, 20f, 0xFFFFFFFF.toInt(), true)
 
@@ -324,12 +320,12 @@ class Overlay(private val svc: AccessibilityService) {
         val row1 = LinearLayout(svc).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(chip(r.level?.label ?: "?", color, 0xFFFFFFFF.toInt()))
+            addView(chip(Evaluator.labelOf(r), Evaluator.labelColor(r), 0xFFFFFFFF.toInt()))
             if (isBest) addView(tv(" ★", 12f, GOLD, true))
             addView(tv("  " + Evaluator.perKm(r), 17f, bright, true))
             addView(View(svc), LinearLayout.LayoutParams(0, 1, 1f))
             if (r.net != null) {
-                addView(tv(Evaluator.money(r.net) + " líq.", 13f, Evaluator.netColor(r), true))
+                addView(tv(Evaluator.money(r.net), 14f, Evaluator.netColor(r), true))
             }
         }
         val sb = SpannableStringBuilder()

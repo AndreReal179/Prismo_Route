@@ -12,6 +12,11 @@ import android.view.accessibility.AccessibilityWindowInfo
 
 class RouteService : AccessibilityService() {
 
+    companion object {
+        /** true enquanto o serviço está conectado (a tela inicial usa p/ avisar quando travou) */
+        @Volatile var running = false
+    }
+
     private lateinit var prefs: Prefs
     private lateinit var overlay: Overlay
     private lateinit var fab: Fab
@@ -48,6 +53,7 @@ class RouteService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        running = true
         prefs = Prefs(this)
         overlay = Overlay(this)
         fab = Fab(this)
@@ -113,6 +119,7 @@ class RouteService : AccessibilityService() {
 
         val candidate = results
             .filter { !it.offer.route }   // "Rotas disponíveis": nunca toca em "Gerar Rota" sozinho
+            .filter { it.offer.price >= prefs.autoMinPrice }          // valor bruto mínimo
             .filter { (it.effRpk ?: 0.0) >= prefs.autoMinRpk }
             .filter { r -> r.offer.rating?.let { it >= prefs.minRating } ?: true }
             .maxByOrNull { it.effRpk ?: 0.0 } ?: return
@@ -145,6 +152,7 @@ class RouteService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
+        running = false
         handler.removeCallbacks(tick)
         ticking = false
         if (::overlay.isInitialized) overlay.remove()
@@ -161,6 +169,7 @@ class RouteService : AccessibilityService() {
         ticking = false
         if (::overlay.isInitialized) overlay.remove()
         if (::fab.isInitialized) fab.remove()
+        running = false
         super.onDestroy()
     }
 }

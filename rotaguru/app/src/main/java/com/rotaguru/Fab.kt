@@ -6,6 +6,7 @@ import android.animation.PropertyValuesHolder
 import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -56,6 +57,7 @@ class Fab(private val svc: AccessibilityService) {
     fun remove() {
         closeMenu()
         stopPulse()
+        shownKey = ""
         button?.let { runCatching { wm.removeView(it) } }
         button = null
         badge = null
@@ -68,12 +70,19 @@ class Fab(private val svc: AccessibilityService) {
         applyBest()
     }
 
+    private var shownKey = ""
+    private var blink: ValueAnimator? = null
+
     private fun applyBest() {
         val b = badge ?: return
         val r = lastBest
         val eff = r?.effRpk
+        val key = if (r == null || eff == null) "idle" else
+            String.format(BR, "%.2f", eff) + "|" + Evaluator.labelOf(r) + "|" + r.level
+        if (key == shownKey) return          // nada mudou: não reinicia a animação
+        shownKey = key
+        stopPulse()
         if (r == null || eff == null) {
-            stopPulse()
             b.text = "R$"
             b.textSize = 13f
             b.setTextColor(GOLD)
@@ -85,37 +94,51 @@ class Fab(private val svc: AccessibilityService) {
             return
         }
         val lvl = r.level ?: Level.RUIM
-        val col = when (lvl) {
+        val caution = Evaluator.badRating(r)
+        val col = if (caution) Evaluator.CAUTION else when (lvl) {
             Level.OTIMO -> 0xFF1FB45A.toInt()
             Level.MEDIO -> 0xFFEF8F00.toInt()
             Level.RUIM -> 0xFFC62828.toInt()
         }
+        val label = Evaluator.labelOf(r)
         val sb = SpannableStringBuilder(String.format(BR, "%.2f", eff))
         val st = sb.length
-        sb.append("\n").append(lvl.label)
-        sb.setSpan(RelativeSizeSpan(0.58f), st, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        sb.append("\n").append(label)
+        sb.setSpan(RelativeSizeSpan(if (label.length > 6) 0.5f else 0.58f), st, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         b.text = sb
         b.textSize = 14f
         b.setTextColor(0xFFFFFFFF.toInt())
-        b.background = GradientDrawable().apply {
+        val bg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(col)
-            setStroke(dp(2), if (lvl == Level.OTIMO) 0xFFFFFFFF.toInt() else 0x88FFFFFF.toInt())
+            setStroke(dp(2), 0x88FFFFFF.toInt())
         }
-        if (lvl == Level.OTIMO) startPulse() else stopPulse()
+        b.background = bg
+        if (lvl == Level.OTIMO && !caution) startPulse(bg)
     }
 
-    private fun startPulse() {
-        if (pulse?.isRunning == true) return
+    /** ÓTIMO: o balão cresce e diminui e a borda pisca (grossa/clara <-> fina/branca). */
+    private fun startPulse(bg: GradientDrawable) {
         val v = badge ?: return
         pulse = ObjectAnimator.ofPropertyValuesHolder(
             v,
-            PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.2f),
-            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.2f)
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.1f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.1f)
         ).apply {
-            duration = 450
+            duration = 500
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.REVERSE
+            start()
+        }
+        blink = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 500
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            addUpdateListener { a ->
+                val t = a.animatedValue as Float
+                val color = Color.argb((255 - 150 * t).toInt(), 255 - (70 * t).toInt(), 255, 255 - (55 * t).toInt())
+                bg.setStroke(dp(2) + (dp(3) * t).toInt(), color)
+            }
             start()
         }
     }
@@ -123,6 +146,8 @@ class Fab(private val svc: AccessibilityService) {
     private fun stopPulse() {
         pulse?.cancel()
         pulse = null
+        blink?.cancel()
+        blink = null
         badge?.scaleX = 1f
         badge?.scaleY = 1f
     }
@@ -202,6 +227,7 @@ class Fab(private val svc: AccessibilityService) {
         runCatching { wm.addView(b, lp) }.onSuccess {
             button = b
             badge = circle
+            shownKey = ""
             buttonLp = lp
             addedAt = android.os.SystemClock.uptimeMillis()
             applyBest()
@@ -327,7 +353,13 @@ class Fab(private val svc: AccessibilityService) {
         box.addView(row(swLabel, sw))
 
         box.addView(stepper(
-            "A partir de (R$/km)",
+            "Valor mínimo (bruto)",
+            { prefs.autoMinPrice }, { prefs.autoMinPrice = it },
+            1f, 0f, 300f
+        ) { if (it <= 0f) "sem mín." else String.format(BR, "R$ %.0f", it) })
+
+        box.addView(stepper(
+            "Valor R$/km mínimo",
             { prefs.autoMinRpk }, { prefs.autoMinRpk = it },
             0.10f, 0.5f, 6f
         ) { String.format(BR, "R$ %.2f", it) })
@@ -345,7 +377,7 @@ class Fab(private val svc: AccessibilityService) {
         ) { String.format(BR, "%.0f km/h", it) })
 
         box.addView(label(
-            "Aceita só se o R$/km (busca + viagem) e a nota atingirem o mínimo.",
+            "Aceita só se o valor bruto, o R$/km (busca + viagem) e a nota atingirem o mínimo.",
             10f, MUTED
         ).apply { setPadding(0, dp(4), 0, dp(6)) })
 

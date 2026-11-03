@@ -1,6 +1,12 @@
 package com.rotaguru
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ComponentName
+import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
 import android.content.Intent
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -206,6 +212,8 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
         status.addView(activateBtn, lp(14))
+        // "Ativar": religa o serviço quando o app fechou/travou
+        status.addView(button("Ativar", true) { restartService() }, lp(8))
         col.addView(status, lp(18))
 
         // ---------- como começar
@@ -293,10 +301,12 @@ class MainActivity : Activity() {
         val auto = card()
         auto.addView(title("Aceite automático"))
         auto.addView(
-            switchRow("Aceitar corridas ÓTIMAS", "O app toca sozinho na melhor corrida", prefs.autoAccept) {
+            switchRow("Aceitar corridas automaticamente", "Só aceita se atingir os três mínimos abaixo", prefs.autoAccept) {
                 prefs.autoAccept = it
             }, lp(12)
         )
+        auto.addView(field("Valor mínimo bruto (R$, 0 = sem mínimo)", prefs.autoMinPrice) { prefs.autoMinPrice = it }, lp(12))
+        auto.addView(field("Valor R$/km mínimo", prefs.autoMinRpk) { prefs.autoMinRpk = it }, lp(12))
         auto.addView(field("Nota mínima do passageiro", prefs.minRating) { prefs.minRating = it }, lp(12))
         col.addView(auto, lp(12))
 
@@ -322,12 +332,64 @@ class MainActivity : Activity() {
             shape = GradientDrawable.OVAL
             setColor(if (enabled) GREEN else AMBER)
         }
-        statusTitle.text = if (enabled) "Serviço ativo" else "Serviço desativado"
-        statusSub.text = if (enabled) "Abra o app de corridas e veja o painel nas corridas."
+        val stuck = enabled && !RouteService.running
+        statusDot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(if (stuck) 0xFFEF5350.toInt() else if (enabled) GREEN else AMBER)
+        }
+        statusTitle.text = if (stuck) "Serviço parado" else if (enabled) "Serviço ativo" else "Serviço desativado"
+        statusSub.text = if (stuck) "Toque em \"Ativar\" para reiniciar o serviço."
+        else if (enabled) "Abra o app de corridas e veja o painel nas corridas."
         else "Ative a acessibilidade para o painel aparecer."
         activateBtn.text = if (enabled) "Gerenciar acessibilidade" else "Ativar acessibilidade"
         styleButton(activateBtn, !enabled)
         refreshSample()
+    }
+
+    /**
+     * Reinicia o serviço de acessibilidade. Com a permissão WRITE_SECURE_SETTINGS (concedida uma única vez
+     * por ADB) o app desliga e liga a si mesmo; sem ela, explica e abre a tela de acessibilidade.
+     */
+    private fun restartService() {
+        val comp = ComponentName(this, RouteService::class.java).flattenToString()
+        val granted = checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            val ok = runCatching {
+                val cur = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+                val others = cur.split(':').filter { it.isNotEmpty() && it != comp }
+                Settings.Secure.putString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, others.joinToString(":"))
+                Handler(Looper.getMainLooper()).postDelayed({
+                    runCatching {
+                        Settings.Secure.putString(
+                            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                            (others + comp).joinToString(":")
+                        )
+                        Settings.Secure.putInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                    }
+                    Handler(Looper.getMainLooper()).postDelayed({ onResume() }, 800)
+                }, 600)
+            }.isSuccess
+            Toast.makeText(this, if (ok) "Reiniciando o serviço…" else "Não foi possível reiniciar", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Ativar com 1 toque")
+            .setMessage(
+                "Para este botão reiniciar o serviço sozinho, libere uma vez pelo computador " +
+                    "(celular com depuração USB):\n\nadb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS\n\n" +
+                    "Enquanto isso, ligue/desligue a chave do Rota Guru na tela de acessibilidade."
+            )
+            .setPositiveButton("Abrir acessibilidade") { _, _ ->
+                val opened = runCatching {
+                    startActivity(
+                        Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+                            .putExtra("android.intent.extra.COMPONENT_NAME", comp)
+                    )
+                }.isSuccess
+                if (!opened) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            .setNegativeButton("Fechar", null)
+            .show()
     }
 
     private fun sampleRow(name: String, r: Result) {

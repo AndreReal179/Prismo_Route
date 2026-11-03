@@ -83,14 +83,19 @@ object Evaluator {
         return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total, totalMin, tm, pm, timeEst)
     }
 
-    /** "31 min total (9+22)": tempo até o cliente + tempo até o fim da rota; null se faltar algum. */
+    /** "31 min": tempo até o cliente + tempo até o fim da rota (com ~ se estimado); null se faltar algum. */
     fun timeText(r: Result): String? {
         val total = r.totalMin ?: return null
-        val pm = r.pickMin
-        val tm = r.destMin
-        val br = if (pm != null && tm != null) String.format(BR, " (%.0f+%.0f)", pm, tm) else ""
-        return (if (r.timeEst) "~" else "") + String.format(BR, "%.0f min total", total) + br
+        return (if (r.timeEst) "~" else "") + String.format(BR, "%.0f min", total)
     }
+
+    // ---- nota baixa do passageiro: "CUIDADO" no lugar de RUIM/MÉDIO/ÓTIMO
+    const val CAUTION = 0xFFE65100.toInt()
+    const val BAD_RATING = 4.60
+
+    fun badRating(r: Result): Boolean = (r.offer.rating ?: 5.0) < BAD_RATING
+    fun labelOf(r: Result): String = if (badRating(r)) "CUIDADO" else (r.level?.label ?: "?")
+    fun labelColor(r: Result): Int = if (badRating(r)) CAUTION else (r.level?.color ?: 0xFF6B7280.toInt())
 
     /** km total com 1 casa (busca + corrida). */
     fun totalKmText(r: Result): String? = r.totalKm?.let {
@@ -119,7 +124,7 @@ object Evaluator {
     /** Nota do passageiro: verde = ótima, laranja = ok, vermelho = baixa. */
     fun ratingColor(v: Double): Int = when {
         v >= 4.80 -> GREEN
-        v >= 4.60 -> AMBER
+        v >= BAD_RATING -> AMBER
         else -> RED
     }
 

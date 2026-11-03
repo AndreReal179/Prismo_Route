@@ -50,6 +50,11 @@ class Prefs(ctx: Context) {
         get() = sp.getFloat("autoMinRpk", 2.0f)
         set(v) { sp.edit().putFloat("autoMinRpk", v).apply() }
 
+    /** Aceite automático: valor bruto mínimo da corrida (R$). 0 = sem mínimo */
+    var autoMinPrice: Float
+        get() = sp.getFloat("autoMinPrice", 0f)
+        set(v) { sp.edit().putFloat("autoMinPrice", v).apply() }
+
     /** Velocidade média (km/h) usada p/ estimar o tempo quando o app de corridas não mostra */
     var avgSpeed: Float
         get() = sp.getFloat("avgSpeed", 35f)
