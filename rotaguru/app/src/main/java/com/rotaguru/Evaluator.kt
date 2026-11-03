@@ -37,7 +37,9 @@ class Result(
     val suggest: Double? = null, // valor sugerido p/ pedir ao passageiro (null = preço já atende o mínimo)
     val totalKm: Double? = null,  // km total = busca + corrida
     val totalMin: Double? = null, // tempo total = busca + viagem (null se algum tempo for desconhecido)
-    val destMin: Double? = null   // tempo da viagem até o destino final
+    val destMin: Double? = null,  // tempo da viagem até o destino final
+    val pickMin: Double? = null,  // tempo até o passageiro
+    val timeEst: Boolean = false  // true = algum tempo foi estimado pela velocidade média
 )
 
 object Evaluator {
@@ -59,8 +61,11 @@ object Evaluator {
                 else -> Level.RUIM
             }
         }
-        val tm = o.tripMin
-        val pm = o.pickupMin
+        // tempos: usa os do app/mapa; se não der pra ler, estima pela velocidade média configurada
+        val speed = p.avgSpeed.coerceAtLeast(5f).toDouble()
+        val tm: Double? = o.tripMin ?: trip?.let { it / speed * 60.0 }
+        val pm: Double? = o.pickupMin ?: o.pickupKm?.let { it / speed * 60.0 }
+        val timeEst = o.tripMin == null || o.pickupMin == null
         val rph = if (tm != null && pm != null && tm + pm > 0) o.price / ((tm + pm) / 60.0) else null
 
         // gasolina: km total (busca + corrida)
@@ -73,16 +78,16 @@ object Evaluator {
             if (need > 0 && o.price < need - 0.005) need else null
         }
         val totalMin = if (tm != null && pm != null) tm + pm else null
-        return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total, totalMin, tm)
+        return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total, totalMin, tm, pm, timeEst)
     }
 
     /** "31 min total (9+22)": tempo até o cliente + tempo até o fim da rota; null se faltar algum. */
     fun timeText(r: Result): String? {
         val total = r.totalMin ?: return null
-        val pm = r.offer.pickupMin
-        val tm = r.offer.tripMin
+        val pm = r.pickMin
+        val tm = r.destMin
         val br = if (pm != null && tm != null) String.format(BR, " (%.0f+%.0f)", pm, tm) else ""
-        return String.format(BR, "%.0f min total", total) + br
+        return (if (r.timeEst) "~" else "") + String.format(BR, "%.0f min total", total) + br
     }
 
     /** km total com 1 casa (busca + corrida). */

@@ -45,6 +45,29 @@ class Prefs(ctx: Context) {
         get() = sp.getFloat("minRpk", 1.7f)
         set(v) { sp.edit().putFloat("minRpk", v).apply() }
 
+    /** Aceite automático: só aceita corridas com R$/km (total, busca + viagem) a partir deste valor */
+    var autoMinRpk: Float
+        get() = sp.getFloat("autoMinRpk", 2.0f)
+        set(v) { sp.edit().putFloat("autoMinRpk", v).apply() }
+
+    /** Velocidade média (km/h) usada p/ estimar o tempo quando o app de corridas não mostra */
+    var avgSpeed: Float
+        get() = sp.getFloat("avgSpeed", 35f)
+        set(v) { sp.edit().putFloat("avgSpeed", v).apply() }
+
+    /** Posição do botão flutuante (-1 = padrão) */
+    var fabX: Int
+        get() = sp.getInt("fabX", -1)
+        set(v) { sp.edit().putInt("fabX", v).apply() }
+    var fabY: Int
+        get() = sp.getInt("fabY", -1)
+        set(v) { sp.edit().putInt("fabY", v).apply() }
+
+    /** Pacote do app de corridas (descoberto ao ler a primeira oferta) */
+    var ridePkg: String
+        get() = sp.getString("ridePkg", "") ?: ""
+        set(v) { sp.edit().putString("ridePkg", v).apply() }
+
     /** Busca até este valor (km) = verde */
     var pickupGood: Float
         get() = sp.getFloat("pickupGood", 2.0f)

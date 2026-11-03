@@ -14,6 +14,8 @@ class RouteService : AccessibilityService() {
 
     private lateinit var prefs: Prefs
     private lateinit var overlay: Overlay
+    private lateinit var fab: Fab
+    private var lastPkg = ""
     private val handler = Handler(Looper.getMainLooper())
     private var scheduled = false
     private var lastClick = 0L
@@ -31,6 +33,12 @@ class RouteService : AccessibilityService() {
                 if (now - lastEvent < 60_000 || overlay.isShowing) scan()
             } catch (_: Throwable) {
             }
+            // botão flutuante: aparece no app de corridas (ou em qualquer app até descobrirmos qual é)
+            try {
+                val ride = prefs.ridePkg
+                fab.setVisible(ride.isEmpty() || lastPkg == ride)
+            } catch (_: Throwable) {
+            }
             handler.postDelayed(this, 900)
         }
     }
@@ -39,6 +47,7 @@ class RouteService : AccessibilityService() {
         super.onServiceConnected()
         prefs = Prefs(this)
         overlay = Overlay(this)
+        fab = Fab(this)
         handler.removeCallbacks(tick)
         ticking = false
         if (!ticking) {
@@ -49,6 +58,10 @@ class RouteService : AccessibilityService() {
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         if (e == null || e.packageName == packageName || !::overlay.isInitialized) return
+        val pkg = e.packageName?.toString().orEmpty()
+        if (pkg.isNotEmpty() && !pkg.contains("systemui") && !pkg.contains("inputmethod") && !pkg.contains("keyboard")) {
+            lastPkg = pkg
+        }
         lastEvent = SystemClock.uptimeMillis()
         if (scheduled) return
         scheduled = true
@@ -77,6 +90,7 @@ class RouteService : AccessibilityService() {
             overlay.hideSoon()
             return
         }
+        root.packageName?.toString()?.let { if (it != prefs.ridePkg) prefs.ridePkg = it }
         val results = offers.map { Evaluator.evaluate(it, prefs) }
         runCatching { overlay.show(results) }
         runCatching { maybeAutoAccept(results) }
@@ -88,7 +102,7 @@ class RouteService : AccessibilityService() {
         if (now - lastClick < 3000) return
 
         val candidate = results
-            .filter { it.level == Level.OTIMO }
+            .filter { (it.effRpk ?: 0.0) >= prefs.autoMinRpk }
             .filter { r -> r.offer.rating?.let { it >= prefs.minRating } ?: true }
             .maxByOrNull { it.effRpk ?: 0.0 } ?: return
 
@@ -127,6 +141,7 @@ class RouteService : AccessibilityService() {
         handler.removeCallbacks(tick)
         ticking = false
         if (::overlay.isInitialized) overlay.remove()
+        if (::fab.isInitialized) fab.remove()
         super.onDestroy()
     }
 }
