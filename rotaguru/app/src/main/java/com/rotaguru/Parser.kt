@@ -27,15 +27,20 @@ object Parser {
         return t.toDoubleOrNull()
     }
 
-    private fun flatten(n: AccessibilityNodeInfo?, out: MutableList<T>, depth: Int = 0) {
+    private val ONLY_MIN = Regex("""^\s*(\d+)\s*min\.?\s*$""", RegexOption.IGNORE_CASE)
+
+    /** hidden = true: inclui também nós "não visíveis" e lê text + contentDescription (balões do mapa). */
+    private fun flatten(n: AccessibilityNodeInfo?, out: MutableList<T>, depth: Int = 0, hidden: Boolean = false) {
         if (n == null || depth > 40) return
-        val txt = (n.text ?: n.contentDescription)?.toString()
-        if (!txt.isNullOrBlank() && n.isVisibleToUser) {
+        if (hidden || n.isVisibleToUser) {
+            val texts = if (hidden) listOfNotNull(n.text, n.contentDescription) else listOfNotNull(n.text ?: n.contentDescription)
             val r = Rect()
             n.getBoundsInScreen(r)
-            out.add(T(txt.trim(), r, n))
+            for (c in texts.map { it.toString().trim() }.filter { it.isNotBlank() }.distinct()) {
+                out.add(T(c, r, n))
+            }
         }
-        for (i in 0 until n.childCount) flatten(n.getChild(i), out, depth + 1)
+        for (i in 0 until n.childCount) flatten(n.getChild(i), out, depth + 1, hidden)
     }
 
     private fun clickableAncestor(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -71,8 +76,14 @@ object Parser {
             val rpk = RPK.find(all)?.let { num(it.groupValues[1]) }
             var pickup = PICK.find(all)?.let { num(it.groupValues[1]) }
 
+            // fonte ampla: inclui nós não visíveis e contentDescription (balões do mapa)
+            val wide = mutableListOf<T>()
+            flatten(root, wide, hidden = true)
+            val src = if (wide.isEmpty()) items else wide
+            val screenW = Rect().also { root.getBoundsInScreen(it) }.width().coerceAtLeast(1)
+
             // balões do mapa: "6 min 2,1 km" e "38 min 37,7 km"
-            val bubbles = items.flatMap { t ->
+            val bubbles = src.flatMap { t ->
                 BUBBLE.findAll(t.text).mapNotNull { m ->
                     val min = m.groupValues[1].toDoubleOrNull()
                     val km = num(m.groupValues[2])
@@ -92,10 +103,20 @@ object Parser {
                     // km exato da rota até o passageiro (mapa) tem prioridade sobre o "~x km" arredondado
                     pickup = other.second
                 }
-            } else {
-                val kms = items.mapNotNull { ONLY_KM.find(it.text)?.let { m -> num(m.groupValues[1]) } }
+            }
+
+            // balões separados em "N min" e "x km" (ou só o km, como o balão azul da busca)
+            if (tripKm == null) {
+                var kms = src.mapNotNull { ONLY_KM.find(it.text)?.let { m -> num(m.groupValues[1]) } }
+                if (pickup != null) kms = kms.filter { Math.abs(it - pickup!!) > 0.05 }
                 if (kms.isNotEmpty()) tripKm = kms.maxOrNull()
             }
+            // "9 min." na coluna esquerda do card = tempo até o passageiro; o resto = viagem
+            val mins = src.mapNotNull { t ->
+                ONLY_MIN.find(t.text)?.let { m -> m.groupValues[1].toDoubleOrNull()?.let { v -> Pair(v, t.rect.left < screenW * 0.3) } }
+            }
+            if (pickupMin == null) pickupMin = mins.firstOrNull { it.second }?.first
+            if (tripMin == null) tripMin = mins.filter { !it.second }.maxOfOrNull { it.first }
             val rating = items.firstNotNullOfOrNull { RATING.find(it.text)?.let { m -> num(m.groupValues[1]) } }
             return listOf(
                 Offer(price, rpk, pickup, tripKm, tripMin, pickupMin, rating, acceptNode = acc.node)

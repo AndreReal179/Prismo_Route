@@ -76,12 +76,13 @@ object Evaluator {
         return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total, totalMin, tm)
     }
 
-    /** "44 min total · 38 min destino" (só o que for conhecido); null se não há tempos. */
+    /** "31 min total (9+22)": tempo até o cliente + tempo até o fim da rota; null se faltar algum. */
     fun timeText(r: Result): String? {
-        val parts = mutableListOf<String>()
-        r.totalMin?.let { parts.add(String.format(BR, "%.0f min total", it)) }
-        r.destMin?.let { parts.add(String.format(BR, "%.0f min destino", it)) }
-        return if (parts.isEmpty()) null else parts.joinToString("  ·  ")
+        val total = r.totalMin ?: return null
+        val pm = r.offer.pickupMin
+        val tm = r.offer.tripMin
+        val br = if (pm != null && tm != null) String.format(BR, " (%.0f+%.0f)", pm, tm) else ""
+        return String.format(BR, "%.0f min total", total) + br
     }
 
     /** km total com 1 casa (busca + corrida). */
