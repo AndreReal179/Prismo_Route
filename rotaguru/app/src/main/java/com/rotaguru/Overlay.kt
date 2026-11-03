@@ -56,6 +56,7 @@ class Overlay(private val svc: AccessibilityService) {
 
     fun show(results: List<Result>) {
         handler.removeCallbacks(hideRunnable)
+        hidePending = false
         last = results
         // não redesenha se nada mudou (evita piscar com a releitura periódica)
         val sig = results.joinToString("|") {
@@ -66,12 +67,18 @@ class Overlay(private val svc: AccessibilityService) {
         render()
     }
 
+    private var hidePending = false
+
+    /** Esconde em ~1,2 s. Não reinicia a contagem a cada chamada (antes a releitura periódica adiava para sempre). */
     fun hideSoon() {
-        handler.removeCallbacks(hideRunnable)
+        if (hidePending) return
+        hidePending = true
         handler.postDelayed(hideRunnable, 1200)
     }
 
     fun remove() {
+        hidePending = false
+        handler.removeCallbacks(hideRunnable)
         bar?.let { runCatching { wm.removeView(it) } }
         layer?.let { runCatching { wm.removeView(it) } }
         bar = null
@@ -223,6 +230,10 @@ class Overlay(private val svc: AccessibilityService) {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(chip(r.level?.label ?: "?", color, 0xFFFFFFFF.toInt()))
+            // nota do passageiro junto da classificação (cor pela nota: verde / laranja / vermelho)
+            r.offer.rating?.let {
+                addView(tv("  ★" + String.format(BR, "%.2f", it), 11f, Evaluator.ratingColor(it), true))
+            }
             if (isBest) addView(tv("  ★ MELHOR", 9.5f, GOLD, true))
         }
         val net = SpannableStringBuilder()
@@ -249,8 +260,6 @@ class Overlay(private val svc: AccessibilityService) {
         val timeTxt = Evaluator.timeText(r)
         if (timeTxt != null) add(timeTxt, 0xFFFFFFFF.toInt())
         else r.offer.pickupKm?.let { add("busca " + String.format(BR, "%.1f", it), Evaluator.pickupColor(it, prefs)) }
-        r.offer.rating?.let { add("★" + String.format(BR, "%.2f", it), Evaluator.ratingColor(it)) }
-        r.rph?.let { add(String.format(BR, "R$ %.0f/h", it), MUTED) }
         val rowC = tv(sb, 11f, MUTED).apply {
             ellipsize = TextUtils.TruncateAt.END
             setAutoSizeTextTypeUniformWithConfiguration(8, 11, 1, TypedValue.COMPLEX_UNIT_SP)

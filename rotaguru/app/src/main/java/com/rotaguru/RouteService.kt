@@ -35,6 +35,9 @@ class RouteService : AccessibilityService() {
             }
             // botão flutuante: aparece no app de corridas (ou em qualquer app até descobrirmos qual é)
             try {
+                // app em primeiro plano agora (não depende só de eventos)
+                val ap = rootInActiveWindow?.packageName?.toString().orEmpty()
+                if (ap.isNotEmpty() && ap != packageName && !ignoredPkg(ap)) lastPkg = ap
                 val ride = prefs.ridePkg
                 fab.setVisible(ride.isEmpty() || lastPkg == ride)
             } catch (_: Throwable) {
@@ -59,9 +62,7 @@ class RouteService : AccessibilityService() {
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         if (e == null || e.packageName == packageName || !::overlay.isInitialized) return
         val pkg = e.packageName?.toString().orEmpty()
-        if (pkg.isNotEmpty() && !pkg.contains("systemui") && !pkg.contains("inputmethod") && !pkg.contains("keyboard")) {
-            lastPkg = pkg
-        }
+        if (pkg.isNotEmpty() && !ignoredPkg(pkg)) lastPkg = pkg
         lastEvent = SystemClock.uptimeMillis()
         if (scheduled) return
         scheduled = true
@@ -83,8 +84,20 @@ class RouteService : AccessibilityService() {
         return null
     }
 
+    private fun ignoredPkg(p: String) =
+        p.contains("systemui") || p.contains("inputmethod") || p.contains("keyboard")
+
     private fun scan() {
-        val root = runCatching { findRoot() }.getOrNull() ?: return
+        val root = runCatching { findRoot() }.getOrNull()
+        if (root == null) {            // app minimizado / sem janela: some com os cards
+            overlay.hideSoon()
+            return
+        }
+        val rp = prefs.ridePkg
+        if (rp.isNotEmpty() && root.packageName?.toString() != rp) {   // outro app em primeiro plano
+            overlay.remove()
+            return
+        }
         val offers = runCatching { Parser.parse(root) }.getOrDefault(emptyList())
         if (offers.isEmpty()) {
             overlay.hideSoon()
@@ -131,6 +144,14 @@ class RouteService : AccessibilityService() {
             .addStroke(GestureDescription.StrokeDescription(path, 0, 60))
             .build()
         return dispatchGesture(g, null, null)
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        handler.removeCallbacks(tick)
+        ticking = false
+        if (::overlay.isInitialized) overlay.remove()
+        if (::fab.isInitialized) fab.remove()
+        return super.onUnbind(intent)
     }
 
     override fun onInterrupt() {

@@ -51,8 +51,18 @@ class Fab(private val svc: AccessibilityService) {
     }
 
     // ------------------------------------------------------------------ botão
+    private var addedAt = 0L
+
     private fun showButton() {
-        if (button != null) return
+        // verificador: se o sistema derrubou a janela do botão (ex.: ao fechar o app), recria
+        button?.let {
+            if (it.isAttachedToWindow || android.os.SystemClock.uptimeMillis() - addedAt < 2500) return
+            runCatching { wm.removeView(it) }
+            button = null
+            buttonLp = null
+            menu?.let { m -> runCatching { wm.removeView(m) } }
+            menu = null
+        }
         val size = dp(46)
         val b = TextView(svc).apply {
             text = "R$"
@@ -116,6 +126,7 @@ class Fab(private val svc: AccessibilityService) {
         runCatching { wm.addView(b, lp) }.onSuccess {
             button = b
             buttonLp = lp
+            addedAt = android.os.SystemClock.uptimeMillis()
         }
     }
 
