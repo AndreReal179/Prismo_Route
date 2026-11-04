@@ -15,6 +15,21 @@ class Prefs(ctx: Context) {
         get() = sp.getFloat("otimo", 2.0f)
         set(v) { sp.edit().putFloat("otimo", v).apply() }
 
+    /** iFood (Rotas disponíveis): R$/km a partir do qual a rota é "Médio" (começa igual ao do InDrive) */
+    var ifoodMedio: Float
+        get() = sp.getFloat("ifood_medio", sp.getFloat("medio", 1.5f))
+        set(v) { sp.edit().putFloat("ifood_medio", v).apply() }
+
+    /** iFood: R$/km a partir do qual a rota é "Ótimo" */
+    var ifoodOtimo: Float
+        get() = sp.getFloat("ifood_otimo", sp.getFloat("otimo", 2.0f))
+        set(v) { sp.edit().putFloat("ifood_otimo", v).apply() }
+
+    /** iFood: valor bruto mínimo POR PEDIDO (R$). Abaixo disso a rota vira RUIM. 0 = sem mínimo */
+    var ifoodMinPerOrder: Float
+        get() = sp.getFloat("ifood_minPedido", 0f)
+        set(v) { sp.edit().putFloat("ifood_minPedido", v).apply() }
+
     /** Soma a distância até o passageiro no cálculo (recomendado) */
     var includePickup: Boolean
         get() = sp.getBoolean("pickup", true)

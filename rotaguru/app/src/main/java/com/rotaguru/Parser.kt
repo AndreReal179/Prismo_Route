@@ -30,6 +30,10 @@ object Parser {
     // "R$ 11,08 • 2,96 km em 29 min"  (também "1 h 05 min")
     private val ROUTE_HEAD = Regex("""R\$\s*([\d.,]+)\s*[•·|]\s*([\d.,]+)\s*km\s*em\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*min)?""", RegexOption.IGNORE_CASE)
     private val ROUTE_LEG = Regex("""(Coleta|Entrega)s?\s*\(\s*([\d.,]+)\s*km\s*\)""", RegexOption.IGNORE_CASE)
+    private val POP_DIST = Regex("""Dist[âa]ncia\s+total\s+([\d.,]+)\s*km""", RegexOption.IGNORE_CASE)
+    private val POP_TIME = Regex("""Tempo\s+aproximado(?:\s+de\s+rota)?\s+(?:(\d+)\s*h)?\s*(?:(\d+)\s*min)?""", RegexOption.IGNORE_CASE)
+    private val POP_PRICE = Regex("""^\s*R\$\s*([\d.,]+)\s*$""")
+    private val POP_STOPS = Regex("""(\d+)\s*Paradas?""", RegexOption.IGNORE_CASE)
     private val ONLY_MIN = Regex("""^\s*(\d+)\s*min\.?\s*$""", RegexOption.IGNORE_CASE)
 
     /** hidden = true: inclui também nós "não visíveis" e lê text + contentDescription (balões do mapa). */
@@ -130,6 +134,10 @@ object Parser {
         val routes = parseRoutes(items)
         if (routes.isNotEmpty()) return routes
 
+        // ---------- Rota oferecida (popup "R$ 39,42 / Distância total / Tempo aproximado / Aceitar") ----------
+        val popup = parseOfferPopup(items)
+        if (popup.isNotEmpty()) return popup
+
         // ---------- Tela de lista ----------
         val heads = items.filter { RPK.containsMatchIn(it.text) }.sortedBy { it.rect.top }
         val offers = mutableListOf<Offer>()
@@ -219,10 +227,55 @@ object Parser {
                     tripKm = total, tripMin = if (minutes > 0) minutes else null, pickupMin = if (minutes > 0) 0.0 else null,
                     rating = null,
                     headTop = h.second, headBottom = h.third,
-                    route = true, stops = stops
+                    route = true, stops = stops, coletas = coletas, entregas = entregas
                 )
             )
         }
         return offers
+    }
+
+    /**
+     * Popup de rota oferecida: preço grande, "Distância total x km", "Tempo aproximado de rota 1h 59 min"
+     * e botões Rejeitar / Aceitar. O painel fica no lugar da linha do preço (não cobre os botões).
+     */
+    private fun parseOfferPopup(items: List<T>): List<Offer> {
+        if (items.none { it.text.startsWith("Aceitar", true) || it.text.startsWith("Rejeitar", true) }) return emptyList()
+        val all = items.sortedWith(compareBy({ it.rect.top }, { it.rect.left }))
+            .joinToString("\n") { it.text.replace('\u00A0', ' ') }
+        val km = POP_DIST.find(all)?.let { num(it.groupValues[1]) } ?: return emptyList()
+        val tm = POP_TIME.find(all)
+        val minutes = tm?.let { (it.groupValues[1].toDoubleOrNull() ?: 0.0) * 60 + (it.groupValues[2].toDoubleOrNull() ?: 0.0) } ?: 0.0
+        val distNode = items.firstOrNull {
+            it.text.contains("Dist", true) && it.text.contains("total", true)
+        }
+        val prices = items.filter { POP_PRICE.containsMatchIn(it.text) }
+        val priceNode = (if (distNode != null) prices.filter { it.rect.top < distNode.rect.top } else prices)
+            .maxByOrNull { it.rect.top } ?: return emptyList()
+        val price = num(POP_PRICE.find(priceNode.text)!!.groupValues[1]) ?: return emptyList()
+        // "Coleta 1", "Entrega 1" ... "Entrega 3": o maior número = quantidade
+        val coletas = Regex("""Coleta\s+(\d+)""", RegexOption.IGNORE_CASE).findAll(all)
+            .mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull() ?: 0
+        val entregas = Regex("""Entrega\s+(\d+)""", RegexOption.IGNORE_CASE).findAll(all)
+            .mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull() ?: 0
+        fun plural(n: Int, one: String, many: String) = if (n == 1) "1 $one" else "$n $many"
+        val stops = if (coletas > 0 || entregas > 0) {
+            listOf(
+                if (coletas > 0) plural(coletas, "coleta", "coletas") else null,
+                if (entregas > 0) plural(entregas, "entrega", "entregas") else null
+            ).filterNotNull().joinToString(" · ")
+        } else POP_STOPS.find(all)?.let {
+            val n = it.groupValues[1].toIntOrNull() ?: 0
+            if (n > 0) (if (n == 1) "1 parada" else "$n paradas") else null
+        }
+        return listOf(
+            Offer(
+                price = price, rpkApp = null, pickupKm = null,
+                tripKm = km, tripMin = if (minutes > 0) minutes else null,
+                pickupMin = if (minutes > 0) 0.0 else null,
+                rating = null,
+                headTop = priceNode.rect.top, headBottom = priceNode.rect.bottom,
+                route = true, stops = stops, coletas = coletas, entregas = entregas
+            )
+        )
     }
 }

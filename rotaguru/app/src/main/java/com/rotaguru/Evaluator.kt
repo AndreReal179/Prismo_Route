@@ -24,7 +24,9 @@ class Offer(
     val headTop: Int? = null,
     val headBottom: Int? = null,  // y (tela) da base da linha "R$ x/km" do card, p/ posicionar o selo
     val route: Boolean = false,   // true = card de "Rotas disponíveis" (coletas + entregas)
-    val stops: String? = null     // ex.: "2 coletas · 3 entregas"
+    val stops: String? = null,    // ex.: "2 coletas · 3 entregas"
+    val coletas: Int = 0,         // nº de coletas (lojas) da rota
+    val entregas: Int = 0         // nº de entregas = nº de pedidos
 )
 
 class Result(
@@ -41,7 +43,9 @@ class Result(
     val totalMin: Double? = null, // tempo total = busca + viagem (null se algum tempo for desconhecido)
     val destMin: Double? = null,  // tempo da viagem até o destino final
     val pickMin: Double? = null,  // tempo até o passageiro
-    val timeEst: Boolean = false  // true = algum tempo foi estimado pela velocidade média
+    val timeEst: Boolean = false, // true = algum tempo foi estimado pela velocidade média
+    val perOrder: Double? = null, // iFood: valor bruto de cada pedido (preço ÷ entregas)
+    val belowMinOrder: Boolean = false // iFood: valor por pedido abaixo do mínimo configurado -> RUIM
 )
 
 object Evaluator {
@@ -56,13 +60,17 @@ object Evaluator {
         val estimated = o.tripKm == null
         val base: Double? = if (p.includePickup) total else trip
         val eff: Double? = base?.let { if (it > 0) o.price / it else null }
-        val level: Level? = eff?.let {
+        // iFood: valor por pedido = bruto ÷ nº de entregas; abaixo do mínimo configurado = RUIM
+        val perOrder: Double? = if (o.route && o.entregas >= 1) o.price / o.entregas else null
+        val belowMin = perOrder != null && p.ifoodMinPerOrder > 0f && perOrder < p.ifoodMinPerOrder - 0.005
+        val levelByRpk: Level? = eff?.let {
             when {
-                it >= p.otimo -> Level.OTIMO
-                it >= p.medio -> Level.MEDIO
+                it >= (if (o.route) p.ifoodOtimo else p.otimo) -> Level.OTIMO
+                it >= (if (o.route) p.ifoodMedio else p.medio) -> Level.MEDIO
                 else -> Level.RUIM
             }
         }
+        val level: Level? = if (belowMin) Level.RUIM else levelByRpk
         // tempos: usa os do app/mapa; se não der pra ler, estima pela velocidade média configurada
         val speed = p.avgSpeed.coerceAtLeast(5f).toDouble()
         val tm: Double? = o.tripMin ?: trip?.let { it / speed * 60.0 }
@@ -80,13 +88,19 @@ object Evaluator {
             if (need > 0 && o.price < need - 0.005) need else null
         }
         val totalMin = if (tm != null && pm != null) tm + pm else null
-        return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total, totalMin, tm, pm, timeEst)
+        return Result(o, eff, level, trip, estimated, rph, fuel, net, suggest, total, totalMin, tm, pm, timeEst, perOrder, belowMin)
+    }
+
+    /** 31 -> "31 min"; 119 -> "1h59" */
+    fun minText(m: Double): String {
+        val t = Math.round(m).toInt()
+        return if (t >= 60) String.format(BR, "%dh%02d", t / 60, t % 60) else "$t min"
     }
 
     /** "31 min": tempo até o cliente + tempo até o fim da rota (com ~ se estimado); null se faltar algum. */
     fun timeText(r: Result): String? {
         val total = r.totalMin ?: return null
-        return (if (r.timeEst) "~" else "") + String.format(BR, "%.0f min", total)
+        return (if (r.timeEst) "~" else "") + minText(total)
     }
 
     // ---- nota baixa do passageiro: "CUIDADO" no lugar de RUIM/MÉDIO/ÓTIMO
@@ -102,8 +116,10 @@ object Evaluator {
         (if (r.estimated) "~" else "") + String.format(BR, "%.1f km total", it)
     }
 
+    /** Melhor opção: rotas que cumprem o mínimo por pedido vêm antes; depois, maior R$/km. */
     fun best(results: List<Result>): Result? =
-        results.filter { it.effRpk != null }.maxByOrNull { it.effRpk!! }
+        results.filter { it.effRpk != null }
+            .maxWithOrNull(compareBy<Result>({ !it.belowMinOrder }, { it.effRpk }))
 
     private val BR = Locale("pt", "BR")
 

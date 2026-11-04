@@ -333,14 +333,33 @@ class Overlay(private val svc: AccessibilityService) {
             if (sb.isNotEmpty()) sb.append("  ·  ")
             sb.append(t)
         }
-        r.totalKm?.let { add(String.format(BR, "%.2f km", it)) }
-        r.totalMin?.let { add(String.format(BR, "%.0f min", it)) }
         add(Evaluator.money(r.offer.price))
-        r.fuel?.let { add("gasolina " + Evaluator.money(it)) }
-        r.offer.stops?.let { add(it) }
-        val row2 = tv(sb, 10.5f, MUTED).apply {
+        r.totalKm?.let { add(String.format(BR, "%.2f km", it)) }
+        r.totalMin?.let { add(Evaluator.minText(it)) }
+        r.fuel?.let { add("gas. " + Evaluator.money(it)) }
+        val pedidos = r.offer.entregas
+        if (pedidos < 2) r.offer.stops?.let { add(it) }
+        val left = tv(sb, 10.5f, MUTED).apply {
             ellipsize = TextUtils.TruncateAt.END
             setAutoSizeTextTypeUniformWithConfiguration(7, 11, 1, TypedValue.COMPLEX_UNIT_SP)
+        }
+        // vários pedidos: divide o valor bruto entre as entregas
+        val row2 = LinearLayout(svc).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            if (pedidos >= 2 || r.belowMinOrder) {
+                val each = r.perOrder ?: (r.offer.price / pedidos.coerceAtLeast(1))
+                var txt = if (pedidos >= 2) String.format(BR, "%d pedidos · %s cada", pedidos, Evaluator.money(each))
+                else "1 pedido · " + Evaluator.money(each)
+                if (r.belowMinOrder) txt += " · mín. " + Evaluator.money(prefs.ifoodMinPerOrder.toDouble())
+                addView(
+                    if (r.belowMinOrder) chip(txt, 0xFFC62828.toInt(), 0xFFFFFFFF.toInt())
+                    else chip(txt, GOLD, 0xFF1A1300.toInt()),
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                        .apply { leftMargin = dp(6) }
+                )
+            }
         }
         return LinearLayout(svc).apply {
             orientation = LinearLayout.VERTICAL

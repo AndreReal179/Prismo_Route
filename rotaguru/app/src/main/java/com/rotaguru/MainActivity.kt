@@ -20,6 +20,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
@@ -33,6 +34,17 @@ class MainActivity : Activity() {
     private lateinit var statusSub: TextView
     private lateinit var activateBtn: TextView
     private lateinit var sampleBox: LinearLayout
+
+    private enum class Page { HOME, IFOOD, INDRIVE, CONFIG }
+    private var page = Page.HOME
+    private var rotasOpen = false
+    private var sampleKind = 0            // 0 = sem simulação, 1 = iFood, 2 = InDrive
+    private var homeShown = false
+    private var drawerOpen = false
+    private lateinit var body: LinearLayout
+    private lateinit var titleView: TextView
+    private lateinit var drawer: LinearLayout
+    private lateinit var scrim: View
 
     private val BG = 0xFF0E1014.toInt()
     private val CARD = 0xFF171A21.toInt()
@@ -179,21 +191,148 @@ class MainActivity : Activity() {
         rows.forEachIndexed { i, v -> addView(v, lp(if (i == 0) 0 else gap)) }
     }
 
+    // ------------------------------------------------------------------ estrutura (menu lateral)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
 
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(36), dp(16), dp(40))
+        val root = FrameLayout(this).apply { setBackgroundColor(BG) }
+
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(34), dp(16), dp(8))
             setBackgroundColor(BG)
         }
+        val burger = tx("☰", 24f, TXT, true).apply {
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setOnClickListener { setDrawer(true) }
+        }
+        titleView = tx("Rota Guru", 20f, TXT, true)
+        bar.addView(burger)
+        bar.addView(titleView, LinearLayout.LayoutParams(0, WRAP, 1f))
+        content.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
+        body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), dp(40))
+        }
+        content.addView(
+            ScrollView(this).apply { isFillViewport = true; addView(body) },
+            LinearLayout.LayoutParams(MATCH, 0, 1f)
+        )
+        root.addView(content, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        // ---------- cabeçalho
-        col.addView(tx("Rota Guru", 30f, TXT, true))
-        col.addView(tx("Avaliador de corridas em tempo real", 14f, MUTED), lp(2))
+        scrim = View(this).apply {
+            setBackgroundColor(0x99000000.toInt())
+            visibility = View.GONE
+            alpha = 0f
+            setOnClickListener { setDrawer(false) }
+        }
+        root.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        // ---------- status do serviço
+        drawer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(CARD)
+            setPadding(dp(14), dp(44), dp(14), dp(16))
+            visibility = View.GONE
+            translationX = -dp(290).toFloat()
+            isClickable = true
+        }
+        root.addView(drawer, FrameLayout.LayoutParams(dp(280), MATCH))
+
+        setContentView(root)
+        showPage()
+    }
+
+    private fun setDrawer(open: Boolean) {
+        drawerOpen = open
+        if (open) {
+            buildDrawer()
+            scrim.visibility = View.VISIBLE
+            drawer.visibility = View.VISIBLE
+            scrim.animate().alpha(1f).setDuration(180).start()
+            drawer.animate().translationX(0f).setDuration(200).start()
+        } else {
+            scrim.animate().alpha(0f).setDuration(160).withEndAction { scrim.visibility = View.GONE }.start()
+            drawer.animate().translationX(-dp(290).toFloat()).setDuration(180)
+                .withEndAction { drawer.visibility = View.GONE }.start()
+        }
+    }
+
+    private fun drawerRow(text: String, selected: Boolean, indent: Int, trailing: CharSequence?, onClick: () -> Unit): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12 + indent), dp(13), dp(12), dp(13))
+            if (selected) background = rounded(0xFF222733.toInt(), 12)
+            addView(tx(text, if (indent > 0) 15f else 16f, if (selected) GOLD else TXT, selected || indent == 0),
+                LinearLayout.LayoutParams(0, WRAP, 1f))
+            if (trailing != null) addView(tx(trailing, 13f, MUTED))
+            setOnClickListener { onClick() }
+        }
+
+    private fun buildDrawer() {
+        drawer.removeAllViews()
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, dp(12), dp(14))
+            addView(tx("Rota Guru", 22f, GOLD, true))
+            addView(tx("Avaliador de corridas", 12.5f, MUTED), lp(2))
+            setOnClickListener { navigate(Page.HOME) }
+        }
+        drawer.addView(head, lp())
+        drawer.addView(View(this).apply { setBackgroundColor(LINE) }, LinearLayout.LayoutParams(MATCH, dp(1)))
+
+        val inRotas = page == Page.IFOOD || page == Page.INDRIVE
+        drawer.addView(
+            drawerRow("Rotas", inRotas && !rotasOpen, 0, if (rotasOpen) "▾" else "▸") {
+                rotasOpen = !rotasOpen
+                buildDrawer()
+            }, lp(10)
+        )
+        if (rotasOpen) {
+            drawer.addView(drawerRow("iFood", page == Page.IFOOD, 18, null) { navigate(Page.IFOOD) }, lp(2))
+            drawer.addView(drawerRow("InDrive", page == Page.INDRIVE, 18, null) { navigate(Page.INDRIVE) }, lp(2))
+        }
+        drawer.addView(
+            drawerRow("Configurações", page == Page.CONFIG, 0, "Em breve") { navigate(Page.CONFIG) }, lp(4)
+        )
+    }
+
+    private fun navigate(p: Page) {
+        page = p
+        if (p == Page.IFOOD || p == Page.INDRIVE) rotasOpen = true
+        setDrawer(false)
+        showPage()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        when {
+            drawerOpen -> setDrawer(false)
+            page != Page.HOME -> navigate(Page.HOME)
+            else -> super.onBackPressed()
+        }
+    }
+
+    private fun showPage() {
+        body.removeAllViews()
+        sampleKind = 0
+        homeShown = false
+        when (page) {
+            Page.HOME -> { titleView.text = "Rota Guru"; buildHome() }
+            Page.IFOOD -> { titleView.text = "iFood"; buildIfood() }
+            Page.INDRIVE -> { titleView.text = "InDrive"; buildIndrive() }
+            Page.CONFIG -> { titleView.text = "Configurações"; buildConfig() }
+        }
+    }
+
+    // ------------------------------------------------------------------ início
+    private fun buildHome() {
+        val col = body
+        col.addView(tx("Avaliador de corridas em tempo real", 14f, MUTED), lp(0))
+
         val status = card()
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -214,21 +353,19 @@ class MainActivity : Activity() {
         status.addView(activateBtn, lp(14))
         // "Ativar": religa o serviço quando o app fechou/travou
         status.addView(button("Ativar", true) { restartService() }, lp(8))
-        col.addView(status, lp(18))
+        col.addView(status, lp(14))
 
-        // ---------- como começar
         val guide = stack(
             step(1, "Abra o Rota Guru", "Você já está aqui. Deixe o app instalado."),
             step(2, "Ative a acessibilidade",
                 "Toque em \"Ativar acessibilidade\", abra \"Apps instalados\" (ou \"Serviços baixados\"), escolha Rota Guru e ligue a chave."),
             step(3, "Ajuste seus valores",
-                "Preencha gasolina, consumo e os R$/km mais abaixo nesta tela."),
+                "Abra o menu ☰ → Rotas → iFood ou InDrive e preencha gasolina, consumo e os R$/km."),
             step(4, "Abra o app de corridas",
                 "O painel aparece em cada corrida. Na tela de detalhe: toque curto recolhe, toque longo volta para cá.")
         )
         col.addView(collapsible("Como começar", "4 passos rápidos", true, guide), lp(12))
 
-        // ---------- configuração restrita
         val restricted = stack(
             tx("No Android 13 ou mais novo, apps instalados fora da Play Store vêm com a chave bloqueada " +
                 "(aparece \"Configuração restrita\"). Para liberar:", 13f, MUTED),
@@ -257,8 +394,40 @@ class MainActivity : Activity() {
             collapsible("Não consigo ativar", "Chave cinza ou \"Configuração restrita\"", false, restricted),
             lp(12)
         )
+        homeShown = true
+        updateStatus()
+    }
 
-        // ---------- classificação
+    // ------------------------------------------------------------------ iFood
+    private fun buildIfood() {
+        val cls = card()
+        cls.addView(title("Classificação", "Em R$ por km da rota inteira (coleta + entregas)"))
+        cls.addView(
+            pair(
+                field("RUIM abaixo de", prefs.ifoodMedio) { prefs.ifoodMedio = it },
+                field("ÓTIMO a partir de", prefs.ifoodOtimo) { prefs.ifoodOtimo = it }
+            ), lp(14)
+        )
+        body.addView(cls, lp(8))
+
+        val ped = card()
+        ped.addView(title("Valor por pedido",
+            "O app conta as entregas da rota e divide o valor bruto. Abaixo do mínimo = RUIM."))
+        ped.addView(field("Valor mínimo por pedido (R$, 0 = sem mínimo)", prefs.ifoodMinPerOrder) { prefs.ifoodMinPerOrder = it }, lp(14))
+        body.addView(ped, lp(12))
+        body.addView(fuelCard(false), lp(12))
+
+        val sim = card()
+        sim.addView(title("Simulação", "Veja como ficam duas rotas com seus valores"))
+        sampleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        sim.addView(sampleBox, lp(12))
+        body.addView(sim, lp(12))
+        sampleKind = 1
+        refreshSample()
+    }
+
+    // ------------------------------------------------------------------ InDrive
+    private fun buildIndrive() {
         val cls = card()
         cls.addView(title("Classificação", "Em R$ por km rodado (busca + corrida)"))
         cls.addView(
@@ -272,21 +441,9 @@ class MainActivity : Activity() {
                 prefs.includePickup = it
             }, lp(14)
         )
-        col.addView(cls, lp(12))
+        body.addView(cls, lp(8))
+        body.addView(fuelCard(true), lp(12))
 
-        // ---------- gasolina e lucro
-        val fuel = card()
-        fuel.addView(title("Gasolina e lucro", "Gasto = km total ÷ consumo × preço do litro"))
-        fuel.addView(
-            pair(
-                field("Gasolina (R$/litro)", prefs.fuelPrice) { prefs.fuelPrice = it },
-                field("Consumo (km/litro)", prefs.kmPerLiter) { prefs.kmPerLiter = it }
-            ), lp(14)
-        )
-        fuel.addView(field("R$/km mínimo (abaixo disso sugere valor)", prefs.minRpk) { prefs.minRpk = it }, lp(12))
-        col.addView(fuel, lp(12))
-
-        // ---------- cores da busca
         val pick = card()
         pick.addView(title("Cores da busca", "Distância até o passageiro"))
         pick.addView(
@@ -295,9 +452,8 @@ class MainActivity : Activity() {
                 field("Vermelho a partir de (km)", prefs.pickupBad) { prefs.pickupBad = it }
             ), lp(14)
         )
-        col.addView(pick, lp(12))
+        body.addView(pick, lp(12))
 
-        // ---------- aceite automático
         val auto = card()
         auto.addView(title("Aceite automático"))
         auto.addView(
@@ -308,30 +464,51 @@ class MainActivity : Activity() {
         auto.addView(field("Valor mínimo bruto (R$, 0 = sem mínimo)", prefs.autoMinPrice) { prefs.autoMinPrice = it }, lp(12))
         auto.addView(field("Valor R$/km mínimo", prefs.autoMinRpk) { prefs.autoMinRpk = it }, lp(12))
         auto.addView(field("Nota mínima do passageiro", prefs.minRating) { prefs.minRating = it }, lp(12))
-        col.addView(auto, lp(12))
+        body.addView(auto, lp(12))
 
-        // ---------- simulação
         val sim = card()
         sim.addView(title("Simulação", "Veja como ficam duas corridas com seus valores"))
         sampleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         sim.addView(sampleBox, lp(12))
-        col.addView(sim, lp(12))
-
-        setContentView(ScrollView(this).apply {
-            setBackgroundColor(BG)
-            isFillViewport = true
-            addView(col)
-        })
+        body.addView(sim, lp(12))
+        sampleKind = 2
+        refreshSample()
     }
 
+    /** Gasolina e lucro: preço e consumo valem para todos os apps. */
+    private fun fuelCard(withMinRpk: Boolean): LinearLayout {
+        val fuel = card()
+        fuel.addView(title("Gasolina e lucro", "Gasto = km total ÷ consumo × preço do litro (vale para todos os apps)"))
+        fuel.addView(
+            pair(
+                field("Gasolina (R$/litro)", prefs.fuelPrice) { prefs.fuelPrice = it },
+                field("Consumo (km/litro)", prefs.kmPerLiter) { prefs.kmPerLiter = it }
+            ), lp(14)
+        )
+        if (withMinRpk) {
+            fuel.addView(field("R$/km mínimo (abaixo disso sugere valor)", prefs.minRpk) { prefs.minRpk = it }, lp(12))
+        }
+        return fuel
+    }
+
+    // ------------------------------------------------------------------ configurações
+    private fun buildConfig() {
+        val c = card()
+        c.addView(title("Configurações", "Em breve"))
+        c.addView(tx("Estamos preparando novas opções para esta área.", 13.5f, MUTED), lp(10))
+        body.addView(c, lp(8))
+    }
+
+    // ------------------------------------------------------------------ status
     override fun onResume() {
         super.onResume()
+        if (homeShown) updateStatus()
+        refreshSample()
+    }
+
+    private fun updateStatus() {
         val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
             ?.contains(packageName) == true
-        statusDot.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(if (enabled) GREEN else AMBER)
-        }
         val stuck = enabled && !RouteService.running
         statusDot.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -343,7 +520,6 @@ class MainActivity : Activity() {
         else "Ative a acessibilidade para o painel aparecer."
         activateBtn.text = if (enabled) "Gerenciar acessibilidade" else "Ativar acessibilidade"
         styleButton(activateBtn, !enabled)
-        refreshSample()
     }
 
     /**
@@ -403,14 +579,32 @@ class MainActivity : Activity() {
         box.addView(tx(Evaluator.detail(r), 12.5f, MUTED), lp(2))
         val fuelTxt = Evaluator.fuelLine(r)
         if (fuelTxt.isNotEmpty()) box.addView(tx(fuelTxt, 12.5f, Evaluator.netColor(r), true), lp(2))
-        Evaluator.suggestLine(r)?.let { box.addView(tx(it, 12.5f, GOLD, true), lp(2)) }
+        if (r.offer.entregas >= 2 || r.belowMinOrder) {
+            val each = r.perOrder ?: r.offer.price
+            val n = r.offer.entregas
+            val base = if (n >= 2) "$n pedidos · ${Evaluator.money(each)} cada" else "1 pedido · ${Evaluator.money(each)}"
+            box.addView(
+                tx(if (r.belowMinOrder) "$base — abaixo do mínimo (RUIM)" else base, 12.5f,
+                    if (r.belowMinOrder) Evaluator.RED else GOLD, true), lp(2)
+            )
+        }
+        Evaluator.suggestLine(r)?.let { if (!r.offer.route) box.addView(tx(it, 12.5f, GOLD, true), lp(2)) }
         sampleBox.addView(box, lp(if (sampleBox.childCount == 0) 0 else 8))
     }
 
     private fun refreshSample() {
-        if (!::sampleBox.isInitialized) return
+        if (sampleKind == 0 || !::sampleBox.isInitialized) return
         sampleBox.removeAllViews()
-        sampleRow("Aline", Evaluator.evaluate(Offer(39.0, 1.0, 2.1, 37.7, 38.0, 6.0, 4.97), prefs))
-        sampleRow("Manuel", Evaluator.evaluate(Offer(25.5, 1.4, 3.1, null, null, null, 4.8), prefs))
+        if (sampleKind == 1) {
+            sampleRow("Rota com 3 entregas", Evaluator.evaluate(
+                Offer(39.42, null, null, 9.83, 119.0, 0.0, null, route = true, coletas = 1, entregas = 3), prefs))
+            sampleRow("Rota com 5 entregas", Evaluator.evaluate(
+                Offer(30.0, null, null, 8.0, 50.0, 0.0, null, route = true, coletas = 1, entregas = 5), prefs))
+            sampleRow("Rota com 1 entrega", Evaluator.evaluate(
+                Offer(11.08, null, null, 2.96, 29.0, 0.0, null, route = true, coletas = 1, entregas = 1), prefs))
+        } else {
+            sampleRow("Aline", Evaluator.evaluate(Offer(39.0, 1.0, 2.1, 37.7, 38.0, 6.0, 4.97), prefs))
+            sampleRow("Manuel", Evaluator.evaluate(Offer(25.5, 1.4, 3.1, null, null, null, 4.8), prefs))
+        }
     }
 }
