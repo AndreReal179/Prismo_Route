@@ -105,4 +105,24 @@ class Prefs(ctx: Context) {
     var pickupBad: Float
         get() = sp.getFloat("pickupBad", 4.0f)
         set(v) { sp.edit().putFloat("pickupBad", v).apply() }
+
+    // ---- Relatório: faixas dos 3 gráficos (baixo < médio ≤ ... < alto)
+    var repPriceMid: Float
+        get() = sp.getFloat("repPriceMid", 20f)
+        set(v) { sp.edit().putFloat("repPriceMid", v).apply() }
+    var repPriceHigh: Float
+        get() = sp.getFloat("repPriceHigh", 40f)
+        set(v) { sp.edit().putFloat("repPriceHigh", v).apply() }
+    var repRpkMid: Float
+        get() = sp.getFloat("repRpkMid", 2.0f)
+        set(v) { sp.edit().putFloat("repRpkMid", v).apply() }
+    var repRpkHigh: Float
+        get() = sp.getFloat("repRpkHigh", 3.5f)
+        set(v) { sp.edit().putFloat("repRpkHigh", v).apply() }
+    var repPerMid: Float
+        get() = sp.getFloat("repPerMid", 7f)
+        set(v) { sp.edit().putFloat("repPerMid", v).apply() }
+    var repPerHigh: Float
+        get() = sp.getFloat("repPerHigh", 10f)
+        set(v) { sp.edit().putFloat("repPerHigh", v).apply() }
 }

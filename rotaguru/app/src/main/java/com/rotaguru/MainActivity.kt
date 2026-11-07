@@ -35,12 +35,13 @@ class MainActivity : Activity() {
     private lateinit var activateBtn: TextView
     private lateinit var sampleBox: LinearLayout
 
-    private enum class Page { HOME, IFOOD, INDRIVE, CONFIG }
+    private enum class Page { HOME, IFOOD, INDRIVE, REPORT, CONFIG }
     private var page = Page.HOME
     private var rotasOpen = false
     private var sampleKind = 0            // 0 = sem simulação, 1 = iFood, 2 = InDrive
     private var homeShown = false
     private var drawerOpen = false
+    private val report by lazy { ReportScreen(this) }
     private lateinit var body: LinearLayout
     private lateinit var titleView: TextView
     private lateinit var drawer: LinearLayout
@@ -296,6 +297,9 @@ class MainActivity : Activity() {
             drawer.addView(drawerRow("InDrive", page == Page.INDRIVE, 18, null) { navigate(Page.INDRIVE) }, lp(2))
         }
         drawer.addView(
+            drawerRow("Relatório", page == Page.REPORT, 0, null) { navigate(Page.REPORT) }, lp(4)
+        )
+        drawer.addView(
             drawerRow("Configurações", page == Page.CONFIG, 0, "Em breve") { navigate(Page.CONFIG) }, lp(4)
         )
     }
@@ -324,6 +328,7 @@ class MainActivity : Activity() {
             Page.HOME -> { titleView.text = "Rota Guru"; buildHome() }
             Page.IFOOD -> { titleView.text = "iFood"; buildIfood() }
             Page.INDRIVE -> { titleView.text = "InDrive"; buildIndrive() }
+            Page.REPORT -> { titleView.text = "Relatório"; report.build(body) }
             Page.CONFIG -> { titleView.text = "Configurações"; buildConfig() }
         }
     }
@@ -503,6 +508,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (homeShown) updateStatus()
+        if (page == Page.REPORT) report.refresh()
         refreshSample()
     }
 
