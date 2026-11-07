@@ -727,7 +727,7 @@ class MainActivity : Activity() {
             btn.alpha = 0.6f
             status.setTextColor(MUTED)
             status.text = "Procurando…"
-            Updater.checkAsync(this, notify = false, force = true) { rel, err ->
+            Updater.checkAsync(this, notify = true, force = true) { rel, err ->
                 if (page != Page.UPDATES) return@checkAsync
                 btn.isEnabled = true
                 btn.alpha = 1f

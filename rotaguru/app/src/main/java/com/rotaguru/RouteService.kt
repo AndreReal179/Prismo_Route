@@ -29,6 +29,7 @@ class RouteService : AccessibilityService() {
     private var lastClick = 0L
     private var lastEvent = 0L
     private var ticking = false
+    private var lastUpdateCheck = 0L
 
     /**
      * Batimento: enquanto houve atividade recente (ou o selo está na tela) relê a tela a cada ~900 ms.
@@ -53,6 +54,12 @@ class RouteService : AccessibilityService() {
             }
             // relatório: grava as ofertas que já saíram da tela
             try { store.flush() } catch (_: Throwable) {}
+            // atualização: enquanto o serviço está ligado, confere no GitHub a cada 30 min
+            val up = SystemClock.uptimeMillis()
+            if (up - lastUpdateCheck > Updater.SERVICE_EVERY_MS) {
+                lastUpdateCheck = up
+                runCatching { Updater.checkAsync(this@RouteService, notify = true) }
+            }
             handler.postDelayed(this, 900)
         }
     }

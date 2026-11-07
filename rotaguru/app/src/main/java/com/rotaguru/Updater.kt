@@ -44,8 +44,10 @@ object Updater {
     private const val CHANNEL = "rotaguru_update"
     private const val NOTIF_ID = 1002
     private const val JOB_ID = 4201
-    private const val CHECK_EVERY_MS = 3 * 60 * 60 * 1000L     // checagem em segundo plano
-    private const val MIN_GAP_MS = 20 * 60 * 1000L              // não consulta o GitHub mais que isso
+    private const val CHECK_EVERY_MS = 60 * 60 * 1000L          // checagem em segundo plano (app fechado)
+    const val SERVICE_EVERY_MS = 30 * 60 * 1000L                // checagem enquanto o serviço está ligado
+    private const val MIN_GAP_MS = 2 * 60 * 1000L               // não consulta o GitHub mais que isso
+    private const val REMIND_MS = 6 * 60 * 60 * 1000L           // mesma versão: lembra de novo (com som) a cada 6 h
 
     const val ACTION_UPDATE = "com.rotaguru.action.ATUALIZAR"
     const val EXTRA_URL = "url"
@@ -163,7 +165,7 @@ object Updater {
                 err = true
                 lastError = t.message ?: t.javaClass.simpleName
             }
-            if (rel != null && notify) showAvailable(app, rel)
+            if (rel != null && notify) showAvailable(app, rel, remind = force)
             main.post { onResult?.invoke(rel, err) }
         }.start()
     }
@@ -186,11 +188,20 @@ object Updater {
         .putExtra(EXTRA_CODE, r.versionCode)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
-    fun showAvailable(ctx: Context, r: Release) {
+    /**
+     * Notificação "Nova versão". Versão nova = avisa com som na hora. A mesma versão só toca de novo
+     * depois de 6 h (ou quando [remind] = verificação manual); entre uma e outra fica na barra sem som.
+     */
+    fun showAvailable(ctx: Context, r: Release, remind: Boolean = false) {
         val app = ctx.applicationContext
         if (!Notif.canPost(app)) return
         runCatching {
             ensureChannel(app)
+            val sp = app.getSharedPreferences("rotaguru_update", Context.MODE_PRIVATE)
+            val now = System.currentTimeMillis()
+            val sameVersion = sp.getInt("notified_code", 0) == r.versionCode
+            val loud = remind || !sameVersion || now - sp.getLong("notified_at", 0) > REMIND_MS
+            if (loud) sp.edit().putInt("notified_code", r.versionCode).putLong("notified_at", now).apply()
             val pi = PendingIntent.getActivity(
                 app, 10, updateIntent(app, r),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -205,6 +216,9 @@ object Updater {
                 ))
                 .setColor(0xFFFFC107.toInt())
                 .setAutoCancel(true)
+                .setOnlyAlertOnce(!loud)
+                .setCategory(Notification.CATEGORY_RECOMMENDATION)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setContentIntent(pi)
                 .addAction(Notification.Action.Builder(
                     android.graphics.drawable.Icon.createWithResource(app, android.R.drawable.stat_sys_download_done),
@@ -245,7 +259,8 @@ object Updater {
         if (!enabled) return
         runCatching {
             val js = ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
-            if (js.getPendingJob(JOB_ID) != null) return
+            val cur = js.getPendingJob(JOB_ID)
+            if (cur != null && cur.intervalMillis == CHECK_EVERY_MS) return   // já agendado com o intervalo atual
             val job = JobInfo.Builder(JOB_ID, ComponentName(ctx, UpdateJob::class.java))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                 .setPeriodic(CHECK_EVERY_MS)
