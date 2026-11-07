@@ -585,12 +585,16 @@ class MainActivity : Activity() {
                 field("ÓTIMO a partir de", prefs.ifoodOtimo) { prefs.ifoodOtimo = it }
             ), lp(14)
         )
+        val ifRecs = MonthRef.monthRecs(this, route = true)
+        cls.addView(classRef(MonthRef.of(ifRecs.mapNotNull { it.rpk }), "rotas",
+            { prefs.ifoodMedio = it }, { prefs.ifoodOtimo = it }), lp(14))
         body.addView(cls, lp(8))
 
         val ped = card()
         ped.addView(title("Valor por pedido",
             "O app conta as entregas da rota e divide o valor bruto. Abaixo do mínimo = RUIM."))
         ped.addView(field("Valor mínimo por pedido (R$, 0 = sem mínimo)", prefs.ifoodMinPerOrder) { prefs.ifoodMinPerOrder = it }, lp(14))
+        ped.addView(orderRef(MonthRef.of(ifRecs.mapNotNull { it.per })), lp(14))
         body.addView(ped, lp(12))
         body.addView(fuelCard(false), lp(12))
 
@@ -613,6 +617,8 @@ class MainActivity : Activity() {
                 field("ÓTIMO a partir de", prefs.otimo) { prefs.otimo = it }
             ), lp(14)
         )
+        cls.addView(classRef(MonthRef.of(MonthRef.monthRecs(this, route = false).mapNotNull { it.rpk }), "corridas",
+            { prefs.medio = it }, { prefs.otimo = it }), lp(14))
         cls.addView(
             switchRow("Somar a busca", "Conta a distância até o passageiro na nota", prefs.includePickup) {
                 prefs.includePickup = it
@@ -650,6 +656,109 @@ class MainActivity : Activity() {
         body.addView(sim, lp(12))
         sampleKind = 2
         refreshSample()
+    }
+
+    // ------------------------------------------------------------------ referência do mês (vinda do Relatório)
+    private fun money(v: Double) = String.format(java.util.Locale("pt", "BR"), "R$ %.2f", v)
+
+    private fun monthName(): String {
+        val m = arrayOf("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
+            "agosto", "setembro", "outubro", "novembro", "dezembro")
+        return m[java.util.Calendar.getInstance().get(java.util.Calendar.MONTH)]
+    }
+
+    /** Quadro discreto "No mês": base para os campos RUIM / ÓTIMO, com atalho "Usar". */
+    private fun refBox(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        background = rounded(0xFF12151B.toInt(), 12, LINE)
+    }
+
+    private fun refHeader(box: LinearLayout, n: Int, unit: String) {
+        box.addView(tx("📊  NO MÊS · ${monthName().uppercase()} · $n $unit", 10.5f, MUTED, true).apply { letterSpacing = 0.06f })
+    }
+
+    private fun refLine(label: String, value: String, detail: String, color: Int, onUse: (() -> Unit)?): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val dot = View(this@MainActivity).apply {
+                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
+            }
+            addView(dot, LinearLayout.LayoutParams(dp(7), dp(7)).apply { rightMargin = dp(9) })
+            val col = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+            col.addView(tx(android.text.SpannableStringBuilder().apply {
+                append(label + "  ")
+                val st = length
+                append(value)
+                setSpan(android.text.style.StyleSpan(Typeface.BOLD), st, length, 0)
+                setSpan(android.text.style.ForegroundColorSpan(TXT), st, length, 0)
+            }, 13f, MUTED))
+            col.addView(tx(detail, 11.5f, MUTED), lp(1))
+            addView(col, LinearLayout.LayoutParams(0, WRAP, 1f))
+            if (onUse != null) addView(tx("Usar", 12.5f, GOLD, true).apply {
+                setPadding(dp(12), dp(6), dp(4), dp(6))
+                setOnClickListener {
+                    onUse()
+                    Toast.makeText(this@MainActivity, "$label $value aplicado", Toast.LENGTH_SHORT).show()
+                    showPage()
+                }
+            })
+        }
+
+    private fun pctOf(t: MonthRef.Tier, unit: String) =
+        "${t.pct}% das $unit" + (t.avg?.let { " · em média ${money(it)}" } ?: "")
+
+    /** Referência para RUIM abaixo de / ÓTIMO a partir de (R$/km). */
+    private fun classRef(r: MonthRef.Ref?, unit: String, setRuim: (Float) -> Unit, setOtimo: (Float) -> Unit): View {
+        val box = refBox()
+        if (r == null) {
+            refHeader(box, 0, unit)
+            box.addView(tx("Ainda sem $unit este mês. Os valores aparecem aqui conforme o Relatório for registrando.", 12.5f, MUTED), lp(6))
+            return box
+        }
+        refHeader(box, r.n, unit)
+        box.addView(refLine("RUIM abaixo de", money(r.mid) + "/km", pctOf(r.low, unit), 0xFFEF5350.toInt()) {
+            setRuim(r.mid.toFloat())
+        }, lp(10))
+        box.addView(refLine("Médio", money(r.mid) + " a " + money(r.high), pctOf(r.medium, unit), AMBER, null), lp(8))
+        box.addView(refLine("ÓTIMO a partir de", money(r.high) + "/km", pctOf(r.top, unit), GREEN) {
+            setOtimo(r.high.toFloat())
+        }, lp(8))
+        if (r.n < 10) box.addView(tx("Poucos dados ainda: os valores ficam mais precisos com o uso.", 11f, MUTED), lp(8))
+        return box
+    }
+
+    /** Referência do valor por pedido: a faixa com mais pedidos no mês. */
+    private fun orderRef(r: MonthRef.Ref?): View {
+        val box = refBox()
+        if (r == null) {
+            refHeader(box, 0, "rotas")
+            box.addView(tx("Ainda sem rotas do iFood este mês.", 12.5f, MUTED), lp(6))
+            return box
+        }
+        refHeader(box, r.n, "rotas")
+        val i = r.topIdx
+        val t = r.tier(i)
+        val (name, range, color) = when (i) {
+            0 -> Triple("Baixo", "abaixo de ${money(r.mid)}", 0xFFEF5350.toInt())
+            1 -> Triple("Médio", "${money(r.mid)} a ${money(r.high)}", AMBER)
+            else -> Triple("Alto", "${money(r.high)} ou mais", GREEN)
+        }
+        val big = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+            addView(tx("${t.pct}%", 24f, color, true))
+            addView(tx("  dos pedidos ficam em", 12.5f, MUTED).apply { setPadding(0, 0, 0, dp(4)) })
+        }
+        box.addView(big, lp(8))
+        box.addView(tx(t.avg?.let { "≈ ${money(it)} por pedido" } ?: "—", 17f, TXT, true), lp(0))
+        box.addView(tx("Faixa $name: $range", 11.5f, MUTED), lp(2))
+        box.addView(View(this).apply { setBackgroundColor(LINE) }, LinearLayout.LayoutParams(MATCH, 1).apply { topMargin = dp(10) })
+        box.addView(refLine("Baixo", "abaixo de ${money(r.mid)}", pctOf(r.low, "rotas"), 0xFFEF5350.toInt(), null), lp(10))
+        box.addView(refLine("Médio", "${money(r.mid)} a ${money(r.high)}", pctOf(r.medium, "rotas"), AMBER, null), lp(8))
+        box.addView(refLine("Alto", "${money(r.high)} ou mais", pctOf(r.top, "rotas"), GREEN, null), lp(8))
+        return box
     }
 
     /** Gasolina e lucro: preço e consumo valem para todos os apps. */
@@ -792,6 +901,7 @@ class MainActivity : Activity() {
         if (RouteService.running) Notif.show(this)   // garante o aviso fixo na barra
         if (homeShown) updateStatus()
         if (page == Page.REPORT) report.refresh()
+        if (page == Page.IFOOD || page == Page.INDRIVE) showPage()   // referência do mês sempre atualizada
         refreshSample()
     }
 

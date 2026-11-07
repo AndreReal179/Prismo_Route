@@ -254,3 +254,51 @@ object DayBest {
             .apply()
     }
 }
+
+/**
+ * Referência do mês para as abas iFood / InDrive: as mesmas faixas automáticas do Relatório
+ * (baixo / médio / alto), calculadas só com as rotas do mês atual. Recalcula sempre que é chamada,
+ * então acompanha o Relatório sozinha.
+ */
+object MonthRef {
+    class Tier(val pct: Int, val count: Int, val avg: Double?)
+    class Ref(val n: Int, val mid: Double, val high: Double, val low: Tier, val medium: Tier, val top: Tier) {
+        /** 0 = baixo, 1 = médio, 2 = alto — a faixa com mais rotas (empate: a de maior valor). */
+        val topIdx: Int get() = listOf(low, medium, top).withIndex().maxByOrNull { it.value.count * 10 + it.index }!!.index
+        fun tier(i: Int) = when (i) { 0 -> low; 1 -> medium; else -> top }
+    }
+
+    /** Rotas do mês atual: route = true (iFood) / false (InDrive). */
+    fun monthRecs(ctx: Context, route: Boolean): List<Rec> {
+        val c = Calendar.getInstance().apply {
+            set(Calendar.DAY_OF_MONTH, 1)
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }
+        val start = c.timeInMillis
+        return ReportStore.load(ctx).filter { it.t >= start && it.route == route }
+    }
+
+    /** Faixas de [values] (null = sem dados). Mesmo cálculo do Relatório: 3 terços entre 5% e 95%. */
+    fun of(values: List<Double>, step: Double = 0.05): Ref? {
+        if (values.isEmpty()) return null
+        val s = values.sorted()
+        fun q(p: Double): Double {
+            val pos = p * (s.size - 1)
+            val i = Math.floor(pos).toInt()
+            val f = pos - i
+            return if (i + 1 < s.size) s[i] + (s[i + 1] - s[i]) * f else s[i]
+        }
+        val lo = if (s.size >= 20) q(0.05) else s.first()
+        val hi = if (s.size >= 20) q(0.95) else s.last()
+        val third = (hi - lo) / 3.0
+        fun round(v: Double) = Math.round(v / step) * step
+        val mid = round(lo + third)
+        var high = round(lo + 2 * third)
+        if (high <= mid) high = mid + step
+        fun tier(f: (Double) -> Boolean): Tier {
+            val l = values.filter(f)
+            return Tier(Math.round(l.size * 100f / values.size), l.size, l.takeIf { it.isNotEmpty() }?.average())
+        }
+        return Ref(values.size, mid, high, tier { it < mid }, tier { it >= mid && it < high }, tier { it >= high })
+    }
+}
