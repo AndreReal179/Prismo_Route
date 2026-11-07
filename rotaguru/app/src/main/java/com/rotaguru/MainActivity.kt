@@ -530,13 +530,12 @@ class MainActivity : Activity() {
         val cur = Updater.currentName(this)
         val pend = newRelease ?: Updater.pending(this)
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(tx("Avaliador de corridas", 12.5f, MUTED))
         val wrap = { top: Int -> LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(top) } }
         if (pend == null) {
             col.addView(tx("v$cur", 11.5f, 0xFFC9C3E3.toInt(), true).apply {
                 setPadding(dp(9), dp(3), dp(9), dp(4))
                 background = rounded(0xFF1C1630.toInt(), 10, LINE)
-            }, wrap(7))
+            }, wrap(4))
             return col
         }
         val dot = View(this).apply {
@@ -551,7 +550,7 @@ class MainActivity : Activity() {
             addView(tx("v$cur  →  v${pend.versionName}", 11.5f, TXT, true))
             setOnClickListener { navigate(Page.UPDATES) }
         }
-        col.addView(pill, wrap(7))
+        col.addView(pill, wrap(4))
         col.addView(tx("✨ Nova versão disponível · toque para atualizar", 11f, 0xFFC4A1FF.toInt()).apply {
             setOnClickListener { navigate(Page.UPDATES) }
         }, wrap(5))
