@@ -8,17 +8,13 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.text.Editable
-import android.text.InputType
 import android.text.SpannableStringBuilder
 import android.text.Spanned
-import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.util.Calendar
@@ -36,7 +32,6 @@ class ReportScreen(private val act: Activity) {
     private var per = Per.DAY
     private var app = 0                      // 0 = todos, 1 = iFood, 2 = InDrive
     private lateinit var box: LinearLayout
-    private val prefs = Prefs(act)
     private val BR = Locale("pt", "BR")
 
     private val BG = 0xFF0E1014.toInt()
@@ -181,39 +176,71 @@ class ReportScreen(private val act: Activity) {
             box.addView(kpis(sa, sb), lp(12))
         }
 
-        // gráficos
+        // gráficos — as faixas (baixo / médio / alto) são automáticas: calculadas com TODAS as rotas
+        // já guardadas (do mesmo app do filtro), e se ajustam a cada nova rota que chega
         val vs = vsLabel()
+        val baseRecs = all.filter { matchApp(it) }
+        val since = baseRecs.minOfOrNull { it.t }
         box.addView(
             chartCard(
                 "Valor total", "Quanto as rotas pagam no bruto",
                 a.map { it.price }, b.map { it.price },
-                prefs.repPriceMid.toDouble(), prefs.repPriceHigh.toDouble(),
+                autoBands(baseRecs.map { it.price }, 1.0),
                 { String.format(BR, "R$ %.2f", it) }, { String.format(BR, "R$ %.0f", it) },
-                "das rotas", "Nenhuma rota neste período.", vs
+                "das rotas", "Nenhuma rota neste período.", vs, since, "rotas"
             ), lp(14)
         )
         box.addView(
             chartCard(
                 "Valor por km", "R$ por km rodado (busca + corrida)",
                 a.mapNotNull { it.rpk }, b.mapNotNull { it.rpk },
-                prefs.repRpkMid.toDouble(), prefs.repRpkHigh.toDouble(),
+                autoBands(baseRecs.mapNotNull { it.rpk }, 0.05),
                 { String.format(BR, "R$ %.2f", it) }, { String.format(BR, "R$ %.2f", it) },
-                "das rotas", "Nenhuma rota neste período.", vs
+                "das rotas", "Nenhuma rota neste período.", vs, since, "rotas"
             ), lp(12)
         )
         box.addView(
             chartCard(
                 "Valor por pedido", "Valor bruto ÷ entregas (rotas do iFood)",
                 a.mapNotNull { it.per }, b.mapNotNull { it.per },
-                prefs.repPerMid.toDouble(), prefs.repPerHigh.toDouble(),
+                autoBands(baseRecs.mapNotNull { it.per }, 0.05),
                 { String.format(BR, "R$ %.2f", it) }, { String.format(BR, "R$ %.2f", it) },
                 "dos pedidos",
-                if (app == 2) "Disponível só para rotas do iFood." else "Nenhuma rota do iFood neste período.", vs
+                if (app == 2) "Disponível só para rotas do iFood." else "Nenhuma rota do iFood neste período.", vs,
+                since, "pedidos"
             ), lp(12)
         )
 
-        box.addView(history(all.filter { matchApp(it) }), lp(14))
-        box.addView(settingsCard(), lp(12))
+        box.addView(history(baseRecs), lp(14))
+    }
+
+    // ------------------------------------------------------------------ faixas automáticas
+    /** Limites calculados com os valores que já entraram. */
+    private class Bands(val mid: Double, val high: Double, val min: Double, val max: Double, val n: Int)
+
+    /**
+     * Divide os valores que já chegaram em 3 faixas iguais, do menor ao maior:
+     * baixo = primeiro terço, médio = segundo terço, alto = último terço.
+     * Com 20 ou mais valores, ignora os 5% mais extremos de cada ponta (uma corrida fora da curva
+     * não estica as faixas). Os limites são arredondados (R$ 1 no valor total, R$ 0,05 nos demais).
+     */
+    private fun autoBands(values: List<Double>, step: Double): Bands? {
+        if (values.isEmpty()) return null
+        val s = values.sorted()
+        fun q(p: Double): Double {
+            val pos = p * (s.size - 1)
+            val i = Math.floor(pos).toInt()
+            val f = pos - i
+            return if (i + 1 < s.size) s[i] + (s[i + 1] - s[i]) * f else s[i]
+        }
+        val lo = if (s.size >= 20) q(0.05) else s.first()
+        val hi = if (s.size >= 20) q(0.95) else s.last()
+        val third = (hi - lo) / 3.0
+        fun round(v: Double) = Math.round(v / step) * step
+        val mid = round(lo + third)
+        var high = round(lo + 2 * third)
+        if (high <= mid) high = mid + step          // valores todos iguais (ou quase): tudo cai em "médio"
+        return Bands(mid, high, s.first(), s.last(), s.size)
     }
 
     // ------------------------------------------------------------------ peças
@@ -310,27 +337,30 @@ class ReportScreen(private val act: Activity) {
     private fun chartCard(
         title: String, sub: String,
         values: List<Double>, prevValues: List<Double>,
-        mid: Double, high: Double,
+        bands: Bands?,
         fmtAvg: (Double) -> String, fmtLimit: (Double) -> String,
-        what: String, emptyMsg: String, vs: String
+        what: String, emptyMsg: String, vs: String,
+        since: Long?, unit: String
     ): View {
         val c = card()
         c.addView(tx(title, 17f, TXT, true))
         c.addView(tx(sub, 12.5f, MUTED), lp(2))
 
-        if (values.isEmpty()) {
+        if (values.isEmpty() || bands == null) {
             c.addView(tx(emptyMsg, 13f, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, dp(10)) }, lp(0))
             return c
         }
+        val mid = bands.mid
+        val high = bands.high
 
         val n = values.size
         val hi = values.count { it >= high }
         val md = values.count { it >= mid && it < high }
         val lo = n - hi - md
         val tiers = listOf(
-            Tier("Alto", "≥ " + fmtLimit(high), GREEN, hi),
+            Tier("Alto", fmtLimit(high) + " ou mais", GREEN, hi),
             Tier("Médio", fmtLimit(mid) + " a " + fmtLimit(high), AMBER, md),
-            Tier("Baixo", "< " + fmtLimit(mid), RED, lo)
+            Tier("Baixo", "abaixo de " + fmtLimit(mid), RED, lo)
         )
         // o mais comum (em empate, o de maior valor)
         val top = tiers.indices.maxByOrNull { tiers[it].count * 10 + (2 - it) } ?: 0
@@ -387,6 +417,18 @@ class ReportScreen(private val act: Activity) {
         stats.addView(cell("Maior", fmtAvg(values.max())), LinearLayout.LayoutParams(0, WRAP, 1f))
         c.addView(stats, lp(14))
         c.addView(tx("Média ${dl.first}", 11.5f, dl.second), lp(8))
+
+        // de onde vieram as faixas
+        val desde = since?.let { " desde ${dayMonth(it)}" } ?: ""
+        val note = "Faixas automáticas: calculadas com ${bands.n} $unit$desde " +
+            "(de ${fmtAvg(bands.min)} a ${fmtAvg(bands.max)}). Se ajustam a cada nova rota." +
+            if (bands.n < 10) " Ainda com poucos dados: ficam mais precisas com o uso." else ""
+        c.addView(
+            tx("⚙ $note", 11f, MUTED).apply {
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                background = rounded(CARD2, 10)
+            }, lp(10)
+        )
         return c
     }
 
@@ -484,84 +526,6 @@ class ReportScreen(private val act: Activity) {
         )
         return c
     }
-
-    // ------------------------------------------------------------------ faixas dos gráficos
-    private fun settingsCard(): View {
-        val c = card()
-        val content = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
-        val arrow = tx("▸", 18f, MUTED)
-        val header = LinearLayout(act).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            val col = LinearLayout(act).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(tx("Faixas dos gráficos", 17f, TXT, true))
-                addView(tx("Defina o que é valor baixo, médio e alto", 12.5f, MUTED), lp(2))
-            }
-            addView(col, LinearLayout.LayoutParams(0, WRAP, 1f))
-            addView(arrow)
-        }
-        content.visibility = View.GONE
-        header.setOnClickListener {
-            val show = content.visibility != View.VISIBLE
-            content.visibility = if (show) View.VISIBLE else View.GONE
-            arrow.text = if (show) "▾" else "▸"
-        }
-        content.addView(tx("Médio a partir de / Alto a partir de.", 12f, MUTED))
-        content.addView(pair(
-            field("Valor total · médio (R$)", prefs.repPriceMid) { prefs.repPriceMid = it },
-            field("Valor total · alto (R$)", prefs.repPriceHigh) { prefs.repPriceHigh = it }
-        ), lp(10))
-        content.addView(pair(
-            field("R$/km · médio", prefs.repRpkMid) { prefs.repRpkMid = it },
-            field("R$/km · alto", prefs.repRpkHigh) { prefs.repRpkHigh = it }
-        ), lp(10))
-        content.addView(pair(
-            field("Por pedido · médio (R$)", prefs.repPerMid) { prefs.repPerMid = it },
-            field("Por pedido · alto (R$)", prefs.repPerHigh) { prefs.repPerHigh = it }
-        ), lp(10))
-        content.addView(
-            tx("Aplicar faixas", 15f, BG, true).apply {
-                gravity = Gravity.CENTER
-                setPadding(dp(14), dp(13), dp(14), dp(13))
-                background = rounded(GREEN, 12)
-                setOnClickListener { render() }
-            }, lp(14)
-        )
-        c.addView(header)
-        c.addView(content, lp(14))
-        return c
-    }
-
-    private fun pair(a: View, b: View) = LinearLayout(act).apply {
-        orientation = LinearLayout.HORIZONTAL
-        addView(a, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = dp(6) })
-        addView(b, LinearLayout.LayoutParams(0, WRAP, 1f).apply { leftMargin = dp(6) })
-    }
-
-    private fun field(label: String, value: Float, onChange: (Float) -> Unit): LinearLayout =
-        LinearLayout(act).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(tx(label, 11.5f, MUTED))
-            val et = EditText(act).apply {
-                setText(value.toString().replace('.', ','))
-                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                setTextColor(TXT)
-                textSize = 16f
-                setTypeface(typeface, Typeface.BOLD)
-                background = rounded(BG, 10, LINE)
-                setPadding(dp(12), dp(9), dp(12), dp(9))
-                setSelectAllOnFocus(true)
-                addTextChangedListener(object : TextWatcher {
-                    override fun afterTextChanged(s: Editable?) {
-                        s?.toString()?.replace(',', '.')?.toFloatOrNull()?.let { onChange(it) }
-                    }
-                    override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                    override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                })
-            }
-            addView(et, lp(5))
-        }
 
     // ------------------------------------------------------------------ rosca
     /** Gráfico de rosca: fatias alto (verde), médio (laranja) e baixo (vermelho), com animação de entrada. */
