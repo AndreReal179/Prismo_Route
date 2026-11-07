@@ -15,12 +15,13 @@ class RouteService : AccessibilityService() {
     companion object {
         /** true enquanto o serviço está conectado (a tela inicial usa p/ avisar quando travou) */
         @Volatile var running = false
+        /** serviço conectado agora (usado pelo botão Desligar) */
+        @Volatile var instance: RouteService? = null
     }
 
     private lateinit var prefs: Prefs
     private lateinit var overlay: Overlay
     private lateinit var fab: Fab
-    private lateinit var store: ReportStore
     private var lastPkg = ""
     private val handler = Handler(Looper.getMainLooper())
     private var scheduled = false
@@ -34,6 +35,7 @@ class RouteService : AccessibilityService() {
      */
     private val tick = object : Runnable {
         override fun run() {
+            if (!running) return
             try {
                 val now = SystemClock.uptimeMillis()
                 if (now - lastEvent < 60_000 || overlay.isShowing) scan()
@@ -48,8 +50,6 @@ class RouteService : AccessibilityService() {
                 fab.setVisible(rides.isEmpty() || lastPkg in rides)
             } catch (_: Throwable) {
             }
-            // relatório: grava as ofertas que já saíram da tela
-            try { store.flush() } catch (_: Throwable) {}
             handler.postDelayed(this, 900)
         }
     }
@@ -57,10 +57,10 @@ class RouteService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         running = true
+        instance = this
         prefs = Prefs(this)
         overlay = Overlay(this)
         fab = Fab(this)
-        store = ReportStore(this)
         overlay.onHidden = { fab.update(null) }
         handler.removeCallbacks(tick)
         ticking = false
@@ -68,6 +68,22 @@ class RouteService : AccessibilityService() {
             ticking = true
             handler.postDelayed(tick, 900)
         }
+        Notif.show(this)    // notificação fixa com o botão Desligar
+    }
+
+    /**
+     * Desliga o Rota Guru de verdade: tira o botão/painel da tela, remove a notificação e sai da lista de
+     * acessibilidade do sistema (disableSelf). Com isso os apps de banco voltam a abrir.
+     */
+    fun shutdown() {
+        handler.removeCallbacks(tick)
+        ticking = false
+        if (::overlay.isInitialized) runCatching { overlay.remove() }
+        if (::fab.isInitialized) runCatching { fab.remove() }
+        running = false
+        instance = null
+        Notif.cancel(this)
+        runCatching { disableSelf() }
     }
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
@@ -99,6 +115,7 @@ class RouteService : AccessibilityService() {
         p.contains("systemui") || p.contains("inputmethod") || p.contains("keyboard")
 
     private fun scan() {
+        if (!running) return
         val root = runCatching { findRoot() }.getOrNull()
         if (root == null) {            // app minimizado / sem janela: some com os cards
             overlay.hideSoon()
@@ -111,7 +128,6 @@ class RouteService : AccessibilityService() {
         }
         root.packageName?.toString()?.let { prefs.addRidePkg(it) }
         val results = offers.map { Evaluator.evaluate(it, prefs) }
-        runCatching { store.observe(results) }   // relatório
         fab.update(Evaluator.best(results))
         runCatching { overlay.show(results) }
         runCatching { maybeAutoAccept(results) }
@@ -158,9 +174,10 @@ class RouteService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         running = false
+        if (instance === this) instance = null
+        Notif.cancel(this)
         handler.removeCallbacks(tick)
         ticking = false
-        if (::store.isInitialized) runCatching { store.flush(true) }
         if (::overlay.isInitialized) overlay.remove()
         if (::fab.isInitialized) fab.remove()
         return super.onUnbind(intent)
@@ -171,12 +188,13 @@ class RouteService : AccessibilityService() {
     }
 
     override fun onDestroy() {
-        if (::store.isInitialized) runCatching { store.flush(true) }
         handler.removeCallbacks(tick)
         ticking = false
         if (::overlay.isInitialized) overlay.remove()
         if (::fab.isInitialized) fab.remove()
         running = false
+        if (instance === this) instance = null
+        Notif.cancel(this)
         super.onDestroy()
     }
 }

@@ -6,25 +6,34 @@ import android.animation.PropertyValuesHolder
 import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import java.util.Locale
 
 /**
- * Botão flutuante (arrastável). Toque abre um menu com opções rápidas:
- * aceite automático, R$/km mínimo, nota mínima e velocidade média.
+ * Botão flutuante (arrastável). Toque abre o painel de opções rápidas:
+ * aceite automático e seus mínimos, velocidade média, abrir o app e Desligar.
  * Usa TYPE_ACCESSIBILITY_OVERLAY (não precisa de "Exibir sobre outros apps").
  */
 class Fab(private val svc: AccessibilityService) {
@@ -33,20 +42,34 @@ class Fab(private val svc: AccessibilityService) {
     private val prefs = Prefs(svc)
     private val BR = Locale("pt", "BR")
     private val density = svc.resources.displayMetrics.density
+    private val handler = Handler(Looper.getMainLooper())
 
-    private var button: FrameLayout? = null     // janela (um pouco maior p/ a animação não cortar)
-    private var badge: TextView? = null         // o círculo visível
+    private var button: FrameLayout? = null     // janela (maior que o círculo p/ sombra e animação)
+    private var circle: FrameLayout? = null     // o círculo visível
+    private var valueText: TextView? = null
+    private var icon: ImageView? = null
     private var pulse: ObjectAnimator? = null
     private var lastBest: Result? = null
     private var buttonLp: WindowManager.LayoutParams? = null
-    private var menu: LinearLayout? = null
+    private var menu: FrameLayout? = null
+    private var menuClosedAt = 0L
 
+    // paleta
     private val GOLD = 0xFFFFC107.toInt()
-    private val BASE = 0xFF0E1014.toInt()
-    private val MUTED = 0xFFA9AEB8.toInt()
-    private val GREEN = 0xFF4CAF50.toInt()
+    private val PANEL = 0xF7111318.toInt()
+    private val SURFACE = 0xFF1A1E26.toInt()
+    private val SURFACE_HI = 0xFF242935.toInt()
+    private val STROKE = 0x1FFFFFFF
+    private val TXT = 0xFFFFFFFF.toInt()
+    private val MUTED = 0xFF9AA0AC.toInt()
+    private val GREEN = 0xFF2ECC71.toInt()
+    private val RED = 0xFFFF6B6B.toInt()
+
+    private val BTN = 64      // janela do botão (dp)
+    private val CIRCLE = 52   // círculo (dp)
 
     private fun dp(v: Int) = (v * density).toInt()
+    private fun dpf(v: Float) = v * density
     private fun screenW() = svc.resources.displayMetrics.widthPixels
     private fun screenH() = svc.resources.displayMetrics.heightPixels
 
@@ -55,12 +78,14 @@ class Fab(private val svc: AccessibilityService) {
     }
 
     fun remove() {
-        closeMenu()
+        closeMenu(animate = false)
         stopPulse()
         shownKey = ""
         button?.let { runCatching { wm.removeView(it) } }
         button = null
-        badge = null
+        circle = null
+        valueText = null
+        icon = null
         buttonLp = null
     }
 
@@ -73,8 +98,17 @@ class Fab(private val svc: AccessibilityService) {
     private var shownKey = ""
     private var blink: ValueAnimator? = null
 
+    private fun idleBackground() = GradientDrawable(
+        GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF2A2F3B.toInt(), 0xFF0F1116.toInt())
+    ).apply {
+        shape = GradientDrawable.OVAL
+        setStroke(dp(2), GOLD)
+    }
+
     private fun applyBest() {
-        val b = badge ?: return
+        val c = circle ?: return
+        val t = valueText ?: return
+        val ic = icon ?: return
         val r = lastBest
         val eff = r?.effRpk
         val key = if (r == null || eff == null) "idle" else
@@ -83,14 +117,9 @@ class Fab(private val svc: AccessibilityService) {
         shownKey = key
         stopPulse()
         if (r == null || eff == null) {
-            b.text = "R$"
-            b.textSize = 13f
-            b.setTextColor(GOLD)
-            b.background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0xEE0E1014.toInt())
-                setStroke(dp(2), GOLD)
-            }
+            t.visibility = View.GONE
+            ic.visibility = View.VISIBLE
+            c.background = idleBackground()
             return
         }
         val lvl = r.level ?: Level.RUIM
@@ -105,25 +134,34 @@ class Fab(private val svc: AccessibilityService) {
         val st = sb.length
         sb.append("\n").append(label)
         sb.setSpan(RelativeSizeSpan(if (label.length > 6) 0.5f else 0.58f), st, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        b.text = sb
-        b.textSize = 14f
-        b.setTextColor(0xFFFFFFFF.toInt())
-        val bg = GradientDrawable().apply {
+        t.text = sb
+        t.visibility = View.VISIBLE
+        ic.visibility = View.GONE
+        val bg = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(lighten(col), col)
+        ).apply {
             shape = GradientDrawable.OVAL
-            setColor(col)
             setStroke(dp(2), 0x88FFFFFF.toInt())
         }
-        b.background = bg
+        c.background = bg
         if (lvl == Level.OTIMO && !caution) startPulse(bg)
+    }
+
+    private fun lighten(c: Int): Int {
+        val f = 0.22f
+        val r = Color.red(c) + ((255 - Color.red(c)) * f).toInt()
+        val g = Color.green(c) + ((255 - Color.green(c)) * f).toInt()
+        val b = Color.blue(c) + ((255 - Color.blue(c)) * f).toInt()
+        return Color.argb(255, r, g, b)
     }
 
     /** ÓTIMO: o balão cresce e diminui e a borda pisca (grossa/clara <-> fina/branca). */
     private fun startPulse(bg: GradientDrawable) {
-        val v = badge ?: return
+        val v = circle ?: return
         pulse = ObjectAnimator.ofPropertyValuesHolder(
             v,
-            PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.1f),
-            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.1f)
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.08f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.08f)
         ).apply {
             duration = 500
             repeatCount = ValueAnimator.INFINITE
@@ -148,8 +186,8 @@ class Fab(private val svc: AccessibilityService) {
         pulse = null
         blink?.cancel()
         blink = null
-        badge?.scaleX = 1f
-        badge?.scaleY = 1f
+        circle?.scaleX = 1f
+        circle?.scaleY = 1f
     }
 
     // ------------------------------------------------------------------ botão
@@ -158,24 +196,54 @@ class Fab(private val svc: AccessibilityService) {
     private fun showButton() {
         // verificador: se o sistema derrubou a janela do botão (ex.: ao fechar o app), recria
         button?.let {
-            if (it.isAttachedToWindow || android.os.SystemClock.uptimeMillis() - addedAt < 2500) return
+            if (it.isAttachedToWindow || SystemClock.uptimeMillis() - addedAt < 2500) return
             runCatching { wm.removeView(it) }
             stopPulse()
             button = null
-            badge = null
+            circle = null
+            valueText = null
+            icon = null
             buttonLp = null
-            menu?.let { m -> runCatching { wm.removeView(m) } }
-            menu = null
+            closeMenu(animate = false)
         }
-        val size = dp(62)
-        val circle = TextView(svc).apply {
+        val size = dp(BTN)
+
+        val t = TextView(svc).apply {
             gravity = Gravity.CENTER
             includeFontPadding = false
-            setPadding(0, 0, 0, 0)
-            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(TXT)
+            textSize = 14f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
+            setShadowLayer(dpf(2f), 0f, dpf(1f), 0x66000000)
+            visibility = View.GONE
+        }
+        val ic = ImageView(svc).apply {
+            setImageResource(R.drawable.ic_stat_rota)
+            imageTintList = ColorStateList.valueOf(GOLD)
+        }
+        val c = FrameLayout(svc).apply {
+            background = idleBackground()
+            elevation = dpf(6f)
+            outlineProvider = ViewOutlineProvider.BACKGROUND
+            addView(t, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(ic, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        }
+        // pontinho verde = serviço ativo
+        val dot = View(svc).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(GREEN)
+                setStroke(dp(2), 0xFF0F1116.toInt())
+            }
+            elevation = dpf(7f)
         }
         val b = FrameLayout(svc).apply {
-            addView(circle, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.CENTER))
+            clipChildren = false
+            clipToPadding = false
+            addView(c, FrameLayout.LayoutParams(dp(CIRCLE), dp(CIRCLE), Gravity.CENTER))
+            addView(dot, FrameLayout.LayoutParams(dp(12), dp(12), Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(7); rightMargin = dp(7)
+            })
         }
         val lp = WindowManager.LayoutParams(
             size, size,
@@ -200,6 +268,7 @@ class Fab(private val svc: AccessibilityService) {
                     downX = ev.rawX; downY = ev.rawY
                     startX = lp.x; startY = lp.y
                     moved = false
+                    c.animate().scaleX(0.92f).scaleY(0.92f).setDuration(90).start()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -214,11 +283,14 @@ class Fab(private val svc: AccessibilityService) {
                     }
                     true
                 }
-                MotionEvent.ACTION_UP -> {
-                    if (moved) {
-                        prefs.fabX = lp.x
-                        prefs.fabY = lp.y
-                    } else toggleMenu()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    c.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                    if (ev.action == MotionEvent.ACTION_UP) {
+                        if (moved) {
+                            prefs.fabX = lp.x
+                            prefs.fabY = lp.y
+                        } else toggleMenu()
+                    }
                     true
                 }
                 else -> false
@@ -226,69 +298,152 @@ class Fab(private val svc: AccessibilityService) {
         }
         runCatching { wm.addView(b, lp) }.onSuccess {
             button = b
-            badge = circle
+            circle = c
+            valueText = t
+            icon = ic
             shownKey = ""
             buttonLp = lp
-            addedAt = android.os.SystemClock.uptimeMillis()
+            addedAt = SystemClock.uptimeMillis()
             applyBest()
         }
     }
 
     // ------------------------------------------------------------------- menu
     private fun toggleMenu() {
-        if (menu != null) closeMenu() else openMenu()
+        when {
+            menu != null -> closeMenu()
+            // o toque fora do painel (no próprio botão) acabou de fechar: não reabre
+            SystemClock.uptimeMillis() - menuClosedAt < 350 -> Unit
+            else -> openMenu()
+        }
     }
 
-    private fun closeMenu() {
-        menu?.let { runCatching { wm.removeView(it) } }
+    private fun closeMenu(animate: Boolean = true) {
+        val m = menu ?: return
         menu = null
+        menuClosedAt = SystemClock.uptimeMillis()
+        val panel = m.getChildAt(0)
+        if (animate && panel != null) {
+            panel.animate().alpha(0f).scaleX(0.94f).scaleY(0.94f).setDuration(110)
+                .withEndAction { runCatching { wm.removeView(m) } }.start()
+        } else runCatching { wm.removeView(m) }
     }
 
-    private fun menuWidth() = dp(270)
+    private fun menuWidth() = dp(300).coerceAtMost(screenW() - dp(16))
 
+    /** Abre ao lado do botão (lado com mais espaço) sem sair da tela. */
     private fun positionMenu() {
         val m = menu ?: return
         val blp = buttonLp ?: return
         val lp = m.layoutParams as? WindowManager.LayoutParams ?: return
         val w = menuWidth()
-        lp.x = if (blp.x + dp(31) > screenW() / 2) blp.x - w else blp.x + dp(62)
-        lp.x = lp.x.coerceIn(0, (screenW() - w).coerceAtLeast(0))
-        lp.y = blp.y.coerceIn(dp(24), (screenH() - dp(340)).coerceAtLeast(dp(24)))
+        val h = m.measuredHeight.takeIf { it > 0 } ?: lp.height.coerceAtLeast(dp(300))
+        val onRight = blp.x + dp(BTN) / 2 > screenW() / 2
+        lp.x = (if (onRight) blp.x - w - dp(4) else blp.x + dp(BTN) + dp(4))
+            .coerceIn(dp(8), (screenW() - w - dp(8)).coerceAtLeast(dp(8)))
+        lp.y = blp.y.coerceIn(dp(24), (screenH() - h - dp(24)).coerceAtLeast(dp(24)))
         runCatching { wm.updateViewLayout(m, lp) }
+        m.getChildAt(0)?.apply {
+            pivotX = if (onRight) w.toFloat() else 0f
+            pivotY = (blp.y - lp.y + dp(BTN) / 2).toFloat().coerceAtLeast(0f)
+        }
     }
 
-    private fun label(t: String, sp: Float, c: Int, bold: Boolean = false) = TextView(svc).apply {
+    // ---- peças visuais do painel
+    private fun label(t: CharSequence, sp: Float, c: Int, bold: Boolean = false) = TextView(svc).apply {
         text = t
         textSize = sp
         setTextColor(c)
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+        if (bold) setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
     }
 
-    private fun pill(t: String, bg: Int, fg: Int) = TextView(svc).apply {
-        text = t
-        textSize = 13f
-        setTextColor(fg)
-        setTypeface(typeface, Typeface.BOLD)
+    private fun rounded(color: Int, radius: Float, stroke: Int? = null) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dpf(radius)
+        if (stroke != null) setStroke(dp(1), stroke)
+    }
+
+    private fun section(t: String) = label(t.uppercase(BR), 10.5f, 0xCCFFC107.toInt(), true).apply {
+        letterSpacing = 0.1f
+        setPadding(dp(4), dp(16), 0, dp(8))
+    }
+
+    private fun divider() = View(svc).apply { setBackgroundColor(STROKE) }
+
+    private fun group(vararg rows: View) = LinearLayout(svc).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(SURFACE, 14f, STROKE)
+        rows.forEachIndexed { i, v ->
+            if (i > 0) addView(divider(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1).apply {
+                leftMargin = dp(14); rightMargin = dp(14)
+            })
+            addView(v)
+        }
+    }
+
+    /** Chave liga/desliga desenhada (trilho + bolinha), com animação. */
+    private fun toggle(initial: Boolean, onChange: (Boolean) -> Unit): FrameLayout {
+        var on = initial
+        val track = GradientDrawable().apply { cornerRadius = dpf(14f) }
+        val thumb = View(svc).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(TXT) }
+            elevation = dpf(2f)
+        }
+        val travel = dpf(20f)
+        fun paint(animate: Boolean) {
+            track.setColor(if (on) GREEN else 0xFF3A404C.toInt())
+            val tx = if (on) travel else 0f
+            if (animate) thumb.animate().translationX(tx).setDuration(150).start() else thumb.translationX = tx
+        }
+        return FrameLayout(svc).apply {
+            background = track
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            addView(thumb, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.START or Gravity.CENTER_VERTICAL))
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(28))
+            paint(false)
+            setOnClickListener {
+                on = !on
+                paint(true)
+                onChange(on)
+            }
+        }
+    }
+
+    private fun roundBtn(t: String, onTap: () -> Unit) = label(t, 18f, TXT, true).apply {
         gravity = Gravity.CENTER
-        setPadding(dp(12), dp(6), dp(12), dp(6))
-        background = GradientDrawable().apply { setColor(bg); cornerRadius = dp(10).toFloat() }
-    }
-
-    private fun styleSwitch(t: TextView, on: Boolean) {
-        t.text = if (on) "LIGADO" else "DESLIGADO"
-        t.setTextColor(if (on) 0xFFFFFFFF.toInt() else MUTED)
-        (t.background as GradientDrawable).setColor(if (on) GREEN else 0xFF2A2E36.toInt())
-    }
-
-    private fun row(vararg v: View): LinearLayout = LinearLayout(svc).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(0, dp(7), 0, dp(7))
-        v.forEach { addView(it) }
+        includeFontPadding = false
+        background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(SURFACE_HI); setStroke(dp(1), STROKE) }
+        layoutParams = LinearLayout.LayoutParams(dp(32), dp(32))
+        // toque = 1 passo; segurar = repete
+        var repeating = false
+        val rep = object : Runnable {
+            override fun run() {
+                if (!repeating) return
+                onTap()
+                handler.postDelayed(this, 90)
+            }
+        }
+        setOnTouchListener { v, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.alpha = 0.6f
+                    onTap()
+                    repeating = true
+                    handler.postDelayed(rep, 420)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.alpha = 1f
+                    repeating = false
+                    handler.removeCallbacks(rep)
+                }
+            }
+            true
+        }
     }
 
     private fun stepper(
         title: String,
+        sub: String?,
         get: () -> Float,
         set: (Float) -> Unit,
         step: Float,
@@ -296,116 +451,212 @@ class Fab(private val svc: AccessibilityService) {
         max: Float,
         fmt: (Float) -> String
     ): LinearLayout {
-        val value = label(fmt(get()), 14f, 0xFFFFFFFF.toInt(), true).apply {
+        val value = label(fmt(get()), 14f, TXT, true).apply {
             gravity = Gravity.CENTER
-            minWidth = dp(70)
+            minWidth = dp(72)
         }
         fun change(delta: Float) {
             val n = (Math.round((get() + delta) * 100f) / 100f).coerceIn(min, max)
             set(n)
             value.text = fmt(n)
         }
-        val minus = pill("−", 0xFF2A2E36.toInt(), 0xFFFFFFFF.toInt()).apply {
-            setOnClickListener { change(-step) }
+        val col = LinearLayout(svc).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label(title, 13f, TXT))
+            if (sub != null) addView(label(sub, 10.5f, MUTED))
         }
-        val plus = pill("+", 0xFF2A2E36.toInt(), 0xFFFFFFFF.toInt()).apply {
-            setOnClickListener { change(step) }
+        return LinearLayout(svc).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(10), dp(10))
+            addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(roundBtn("−") { change(-step) })
+            addView(value)
+            addView(roundBtn("+") { change(step) })
         }
-        val name = label(title, 12f, MUTED)
-        return row(
-            name.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) },
-            minus, value, plus
-        )
     }
+
+    private fun actionBtn(text: String, iconRes: Int?, fg: Int, bg: GradientDrawable, onTap: () -> Unit) =
+        LinearLayout(svc).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            background = bg
+            setPadding(dp(10), dp(12), dp(10), dp(12))
+            if (iconRes != null) addView(ImageView(svc).apply {
+                setImageResource(iconRes)
+                imageTintList = ColorStateList.valueOf(fg)
+            }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(8) })
+            addView(label(text, 14f, fg, true))
+            setOnClickListener { onTap() }
+        }
 
     private fun openMenu() {
         if (menu != null) return
-        val box = LinearLayout(svc).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(12))
-            background = GradientDrawable().apply {
-                setColor(BASE)
-                cornerRadius = dp(16).toFloat()
-                setStroke(dp(1), 0x55FFC107)
-            }
-        }
 
-        // título + fechar
-        val close = label("✕", 16f, MUTED, true).apply {
-            setPadding(dp(8), 0, 0, 0)
+        // ---------- cabeçalho
+        val logo = FrameLayout(svc).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR, intArrayOf(0xFFFFD54F.toInt(), 0xFFFFA000.toInt())
+            ).apply { cornerRadius = dpf(12f) }
+            addView(ImageView(svc).apply {
+                setImageResource(R.drawable.ic_stat_rota)
+                imageTintList = ColorStateList.valueOf(0xFF111318.toInt())
+            }, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
+        }
+        val statusDot = View(svc).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(GREEN) }
+        }
+        val statusRow = LinearLayout(svc).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(statusDot, LinearLayout.LayoutParams(dp(7), dp(7)).apply { rightMargin = dp(6) })
+            addView(label("Ativo · analisando corridas", 11.5f, MUTED))
+        }
+        val titleCol = LinearLayout(svc).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label("Rota Guru", 16f, TXT, true))
+            addView(statusRow, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
+        }
+        val close = label("✕", 13f, MUTED, true).apply {
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(SURFACE_HI) }
             setOnClickListener { closeMenu() }
         }
-        val title = label("Rota Guru", 15f, GOLD, true).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        val header = LinearLayout(svc).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(logo, LinearLayout.LayoutParams(dp(40), dp(40)).apply { rightMargin = dp(12) })
+            addView(titleCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(close, LinearLayout.LayoutParams(dp(30), dp(30)))
         }
-        box.addView(row(title, close))
 
-        // aceite automático
-        val sw = pill("", 0xFF2A2E36.toInt(), MUTED)
-        styleSwitch(sw, prefs.autoAccept)
-        sw.setOnClickListener {
-            prefs.autoAccept = !prefs.autoAccept
-            styleSwitch(sw, prefs.autoAccept)
+        // ---------- aceite automático
+        val limits = group(
+            stepper("Valor mínimo", "bruto da corrida",
+                { prefs.autoMinPrice }, { prefs.autoMinPrice = it }, 1f, 0f, 300f
+            ) { if (it <= 0f) "sem mín." else String.format(BR, "R$ %.0f", it) },
+            stepper("R$/km mínimo", "busca + viagem",
+                { prefs.autoMinRpk }, { prefs.autoMinRpk = it }, 0.10f, 0.5f, 6f
+            ) { String.format(BR, "R$ %.2f", it) },
+            stepper("Nota mínima", "do passageiro",
+                { prefs.minRating }, { prefs.minRating = it }, 0.05f, 3f, 5f
+            ) { String.format(BR, "%.2f", it) }
+        )
+        fun dim(on: Boolean) { limits.animate().alpha(if (on) 1f else 0.45f).setDuration(150).start() }
+        limits.alpha = if (prefs.autoAccept) 1f else 0.45f
+
+        val autoRow = LinearLayout(svc).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = rounded(SURFACE, 14f, STROKE)
+            val col = LinearLayout(svc).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label("Aceitar automaticamente", 13.5f, TXT, true))
+                addView(label("Só corridas que batem os 3 mínimos", 11f, MUTED))
+            }
+            addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(toggle(prefs.autoAccept) { prefs.autoAccept = it; dim(it) })
         }
-        val swLabel = label("Aceitar rotas automaticamente", 12f, 0xFFFFFFFF.toInt()).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        box.addView(row(swLabel, sw))
 
-        box.addView(stepper(
-            "Valor mínimo (bruto)",
-            { prefs.autoMinPrice }, { prefs.autoMinPrice = it },
-            1f, 0f, 300f
-        ) { if (it <= 0f) "sem mín." else String.format(BR, "R$ %.0f", it) })
+        // ---------- cálculo
+        val calc = group(
+            stepper("Velocidade média", "estima o tempo da corrida",
+                { prefs.avgSpeed }, { prefs.avgSpeed = it }, 5f, 15f, 90f
+            ) { String.format(BR, "%.0f km/h", it) }
+        )
 
-        box.addView(stepper(
-            "Valor R$/km mínimo",
-            { prefs.autoMinRpk }, { prefs.autoMinRpk = it },
-            0.10f, 0.5f, 6f
-        ) { String.format(BR, "R$ %.2f", it) })
-
-        box.addView(stepper(
-            "Nota mínima",
-            { prefs.minRating }, { prefs.minRating = it },
-            0.05f, 3f, 5f
-        ) { String.format(BR, "%.2f", it) })
-
-        box.addView(stepper(
-            "Velocidade média (tempo ~)",
-            { prefs.avgSpeed }, { prefs.avgSpeed = it },
-            5f, 15f, 90f
-        ) { String.format(BR, "%.0f km/h", it) })
-
-        box.addView(label(
-            "Aceita só se o valor bruto, o R$/km (busca + viagem) e a nota atingirem o mínimo.",
-            10f, MUTED
-        ).apply { setPadding(0, dp(4), 0, dp(6)) })
-
-        val more = pill("Mais configurações", 0xFF2A2E36.toInt(), 0xFFFFFFFF.toInt()).apply {
-            setOnClickListener {
-                closeMenu()
-                runCatching {
-                    svc.startActivity(
-                        Intent(svc, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                }
+        // ---------- ações
+        val openApp = actionBtn("Abrir app", null, TXT, rounded(SURFACE_HI, 12f, STROKE)) {
+            closeMenu(animate = false)
+            runCatching {
+                svc.startActivity(Intent(svc, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
         }
-        box.addView(more, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        val turnOff = actionBtn("Desligar", R.drawable.ic_power, RED, rounded(0x24FF5252, 12f, 0x66FF5252)) {
+            val ctx = svc.applicationContext
+            closeMenu(animate = false)
+            Toast.makeText(ctx, "Rota Guru desligado. Já pode abrir o app do banco.", Toast.LENGTH_LONG).show()
+            Power.turnOff(ctx)
+        }
+        val actions = LinearLayout(svc).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(openApp, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(5) })
+            addView(turnOff, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(5) })
+        }
+
+        // ---------- montagem
+        val content = LinearLayout(svc).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(14))
+            addView(header)
+            addView(section("Aceite automático"))
+            addView(autoRow)
+            addView(limits, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            addView(section("Cálculo"))
+            addView(calc)
+            addView(actions, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
+            addView(label("Desligue antes de abrir apps de banco.", 10.5f, MUTED).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(10), 0, 0)
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        val panel = ScrollView(svc).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            background = rounded(PANEL, 22f, 0x33FFC107)
+            clipToOutline = true
+            outlineProvider = ViewOutlineProvider.BACKGROUND
+            elevation = dpf(12f)
+            addView(content)
+        }
+
+        // janela: um pouco maior que o painel p/ a sombra; toque fora fecha
+        val pad = dp(10)
+        val root = FrameLayout(svc).apply {
+            setPadding(pad, pad, pad, pad)
+            clipToPadding = false
+            addView(panel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+            setOnTouchListener { _, ev ->
+                if (ev.action == MotionEvent.ACTION_OUTSIDE) { closeMenu(); true } else false
+            }
+        }
+
+        val w = menuWidth()
+        val maxH = screenH() - dp(48)
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(w - 2 * pad, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val h = (content.measuredHeight + 2 * pad).coerceAtMost(maxH)
+        root.measure(
+            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY)
+        )
 
         val lp = WindowManager.LayoutParams(
-            menuWidth(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            w, h,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
-        runCatching { wm.addView(box, lp) }.onSuccess {
-            menu = box
+        panel.layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, h - 2 * pad)
+        root.layoutParams = lp
+
+        runCatching { wm.addView(root, lp) }.onSuccess {
+            menu = root
             positionMenu()
+            panel.alpha = 0f
+            panel.scaleX = 0.92f
+            panel.scaleY = 0.92f
+            panel.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(170)
+                .setInterpolator(DecelerateInterpolator()).start()
         }
     }
 }

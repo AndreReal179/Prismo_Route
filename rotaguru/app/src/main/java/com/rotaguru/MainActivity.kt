@@ -1,9 +1,8 @@
 package com.rotaguru
 
 import android.app.Activity
-import android.app.AlertDialog
-import android.content.ComponentName
-import android.content.pm.PackageManager
+import android.app.NotificationManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -33,15 +32,15 @@ class MainActivity : Activity() {
     private lateinit var statusTitle: TextView
     private lateinit var statusSub: TextView
     private lateinit var activateBtn: TextView
+    private lateinit var notifWarn: LinearLayout
     private lateinit var sampleBox: LinearLayout
 
-    private enum class Page { HOME, IFOOD, INDRIVE, REPORT, CONFIG }
+    private enum class Page { HOME, IFOOD, INDRIVE, CONFIG }
     private var page = Page.HOME
     private var rotasOpen = false
     private var sampleKind = 0            // 0 = sem simulação, 1 = iFood, 2 = InDrive
     private var homeShown = false
     private var drawerOpen = false
-    private val report by lazy { ReportScreen(this) }
     private lateinit var body: LinearLayout
     private lateinit var titleView: TextView
     private lateinit var drawer: LinearLayout
@@ -56,6 +55,7 @@ class MainActivity : Activity() {
     private val GREEN = 0xFF4CAF50.toInt()
     private val AMBER = 0xFFFFB300.toInt()
     private val GOLD = 0xFFFFC107.toInt()
+    private val RED = 0xFFEF5350.toInt()
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
@@ -244,6 +244,7 @@ class MainActivity : Activity() {
 
         setContentView(root)
         showPage()
+        askNotifications(false)
     }
 
     private fun setDrawer(open: Boolean) {
@@ -297,9 +298,6 @@ class MainActivity : Activity() {
             drawer.addView(drawerRow("InDrive", page == Page.INDRIVE, 18, null) { navigate(Page.INDRIVE) }, lp(2))
         }
         drawer.addView(
-            drawerRow("Relatório", page == Page.REPORT, 0, null) { navigate(Page.REPORT) }, lp(4)
-        )
-        drawer.addView(
             drawerRow("Configurações", page == Page.CONFIG, 0, "Em breve") { navigate(Page.CONFIG) }, lp(4)
         )
     }
@@ -328,7 +326,6 @@ class MainActivity : Activity() {
             Page.HOME -> { titleView.text = "Rota Guru"; buildHome() }
             Page.IFOOD -> { titleView.text = "iFood"; buildIfood() }
             Page.INDRIVE -> { titleView.text = "InDrive"; buildIndrive() }
-            Page.REPORT -> { titleView.text = "Relatório"; report.build(body) }
             Page.CONFIG -> { titleView.text = "Configurações"; buildConfig() }
         }
     }
@@ -352,30 +349,49 @@ class MainActivity : Activity() {
         st.addView(statusSub, lp(2))
         top.addView(st, LinearLayout.LayoutParams(0, WRAP, 1f))
         status.addView(top)
-        activateBtn = button("Ativar acessibilidade", true) {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+        // botão único: Ligar (desligado/travado) ou Desligar (ligado)
+        activateBtn = button("", true) { onPowerClick() }
         status.addView(activateBtn, lp(14))
-        // "Ativar": religa o serviço quando o app fechou/travou
-        status.addView(button("Ativar", true) { restartService() }, lp(8))
+
+        // aviso quando as notificações estão bloqueadas (sem elas o botão Desligar não aparece na barra)
+        notifWarn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(12))
+            background = rounded(0x1FFFB300, 12, 0x55FFB300)
+            addView(tx("Notificações bloqueadas", 13.5f, AMBER, true))
+            addView(tx("Permita as notificações para o botão \"Desligar\" ficar na barra.", 12.5f, MUTED), lp(2))
+            addView(button("Permitir notificações", false) { askNotifications(true) }, lp(10))
+        }
+        status.addView(notifWarn, lp(12))
         col.addView(status, lp(14))
+
+        val bank = card().apply {
+            addView(title("Vai abrir o app do banco?"))
+            addView(tx("Puxe a barra de notificações e toque em \"Desligar\" no aviso do Rota Guru " +
+                "(ou use o botão acima / o menu do botão flutuante). Com o Rota Guru desligado, " +
+                "os apps de banco abrem normalmente. Para voltar a rodar, abra o app e toque em \"Ligar\".",
+                13f, MUTED), lp(6))
+        }
+        col.addView(bank, lp(12))
 
         val guide = stack(
             step(1, "Abra o Rota Guru", "Você já está aqui. Deixe o app instalado."),
-            step(2, "Ative a acessibilidade",
-                "Toque em \"Ativar acessibilidade\", abra \"Apps instalados\" (ou \"Serviços baixados\"), escolha Rota Guru e ligue a chave."),
+            step(2, "Ligue o Rota Guru",
+                "Toque em \"Ligar Rota Guru\". Na primeira vez abre a acessibilidade: escolha Rota Guru e ligue a chave."),
             step(3, "Ajuste seus valores",
                 "Abra o menu ☰ → Rotas → iFood ou InDrive e preencha gasolina, consumo e os R$/km."),
             step(4, "Abra o app de corridas",
-                "O painel aparece em cada corrida. Na tela de detalhe: toque curto recolhe, toque longo volta para cá.")
+                "O painel aparece em cada corrida. Na tela de detalhe: toque curto recolhe, toque longo volta para cá."),
+            step(5, "Terminou? Desligue",
+                "Toque em \"Desligar\" na barra de notificações antes de usar o app do banco.")
         )
-        col.addView(collapsible("Como começar", "4 passos rápidos", true, guide), lp(12))
+        col.addView(collapsible("Como começar", "5 passos rápidos", !Power.isEnabled(this), guide), lp(12))
 
         val restricted = stack(
             tx("No Android 13 ou mais novo, apps instalados fora da Play Store vêm com a chave bloqueada " +
                 "(aparece \"Configuração restrita\"). Para liberar:", 13f, MUTED),
             step(1, "Tente ativar uma vez",
-                "Toque em \"Ativar acessibilidade\" e na chave do Rota Guru. O aviso de configuração restrita aparece."),
+                "Toque em \"Ligar Rota Guru\" e na chave do Rota Guru. O aviso de configuração restrita aparece."),
             step(2, "Abra as informações do app",
                 "Toque no botão abaixo (ou segure o ícone do app → Informações do app)."),
             step(3, "Permita as configurações restritas",
@@ -393,7 +409,11 @@ class MainActivity : Activity() {
                 "• Mantenha o app de corridas aberto na lista ou na tela de detalhe da corrida.", 13f, MUTED),
             button("Ajustes de bateria", false) {
                 runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
-            }
+            },
+            tx("Ligar com 1 toque (sem abrir a acessibilidade)", 14.5f, TXT, true),
+            tx("Libere uma única vez pelo computador, com a depuração USB ligada:\n\n" +
+                "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS\n\n" +
+                "Depois disso o botão \"Ligar Rota Guru\" liga o serviço direto.", 13f, MUTED)
         )
         col.addView(
             collapsible("Não consigo ativar", "Chave cinza ou \"Configuração restrita\"", false, restricted),
@@ -507,71 +527,72 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ status
     override fun onResume() {
         super.onResume()
+        if (RouteService.running) Notif.show(this)   // garante o aviso fixo na barra
         if (homeShown) updateStatus()
-        if (page == Page.REPORT) report.refresh()
         refreshSample()
     }
 
-    private fun updateStatus() {
-        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-            ?.contains(packageName) == true
-        val stuck = enabled && !RouteService.running
-        statusDot.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(if (stuck) 0xFFEF5350.toInt() else if (enabled) GREEN else AMBER)
-        }
-        statusTitle.text = if (stuck) "Serviço parado" else if (enabled) "Serviço ativo" else "Serviço desativado"
-        statusSub.text = if (stuck) "Toque em \"Ativar\" para reiniciar o serviço."
-        else if (enabled) "Abra o app de corridas e veja o painel nas corridas."
-        else "Ative a acessibilidade para o painel aparecer."
-        activateBtn.text = if (enabled) "Gerenciar acessibilidade" else "Ativar acessibilidade"
-        styleButton(activateBtn, !enabled)
+    override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, res: IntArray) {
+        super.onRequestPermissionsResult(code, perms, res)
+        if (RouteService.running) Notif.show(this)
+        if (homeShown) updateStatus()
     }
 
-    /**
-     * Reinicia o serviço de acessibilidade. Com a permissão WRITE_SECURE_SETTINGS (concedida uma única vez
-     * por ADB) o app desliga e liga a si mesmo; sem ela, explica e abre a tela de acessibilidade.
-     */
-    private fun restartService() {
-        val comp = ComponentName(this, RouteService::class.java).flattenToString()
-        val granted = checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            val ok = runCatching {
-                val cur = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-                val others = cur.split(':').filter { it.isNotEmpty() && it != comp }
-                Settings.Secure.putString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, others.joinToString(":"))
-                Handler(Looper.getMainLooper()).postDelayed({
-                    runCatching {
-                        Settings.Secure.putString(
-                            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                            (others + comp).joinToString(":")
-                        )
-                        Settings.Secure.putInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-                    }
-                    Handler(Looper.getMainLooper()).postDelayed({ onResume() }, 800)
-                }, 600)
-            }.isSuccess
-            Toast.makeText(this, if (ok) "Reiniciando o serviço…" else "Não foi possível reiniciar", Toast.LENGTH_SHORT).show()
+    /** Android 13+: pede permissão de notificação (o botão Desligar mora na notificação). */
+    private fun askNotifications(openSettingsIfDenied: Boolean) {
+        if (Notif.canPost(this) && notificationsOn()) return
+        if (!openSettingsIfDenied) {
+            if (Build.VERSION.SDK_INT >= 33 && !Notif.canPost(this))
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 7)
             return
         }
-        AlertDialog.Builder(this)
-            .setTitle("Ativar com 1 toque")
-            .setMessage(
-                "Para este botão reiniciar o serviço sozinho, libere uma vez pelo computador " +
-                    "(celular com depuração USB):\n\nadb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS\n\n" +
-                    "Enquanto isso, ligue/desligue a chave do Rota Guru na tela de acessibilidade."
-            )
-            .setPositiveButton("Abrir acessibilidade") { _, _ ->
-                val opened = runCatching {
-                    startActivity(
-                        Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
-                            .putExtra("android.intent.extra.COMPONENT_NAME", comp)
-                    )
-                }.isSuccess
-                if (!opened) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-            .setNegativeButton("Fechar", null)
-            .show()
+        if (Build.VERSION.SDK_INT >= 33 && !Notif.canPost(this) &&
+            shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS)) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 7)
+            return
+        }
+        runCatching {
+            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+        }
+    }
+
+    private fun notificationsOn() =
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).areNotificationsEnabled()
+
+    private fun onPowerClick() {
+        if (RouteService.running) {
+            Power.turnOff(this)
+            Toast.makeText(this, "Rota Guru desligado. Já pode abrir o app do banco.", Toast.LENGTH_LONG).show()
+        } else {
+            askNotifications(false)
+            if (Power.turnOn(this)) Toast.makeText(this, "Ligando o Rota Guru…", Toast.LENGTH_SHORT).show()
+        }
+        val h = Handler(Looper.getMainLooper())
+        h.postDelayed({ if (homeShown) updateStatus() }, 500)
+        h.postDelayed({ if (homeShown) updateStatus() }, 1500)
+    }
+
+    private fun updateStatus() {
+        val enabled = Power.isEnabled(this)
+        val on = RouteService.running
+        val stuck = enabled && !on
+        statusDot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(if (stuck) RED else if (on) GREEN else AMBER)
+        }
+        statusTitle.text = if (stuck) "Serviço parado" else if (on) "Rota Guru ligado" else "Rota Guru desligado"
+        statusSub.text = if (stuck) "Toque em \"Ligar Rota Guru\" para reiniciar o serviço."
+        else if (on) "Lendo as corridas. Antes de abrir o banco, toque em Desligar."
+        else "Apps de banco funcionam normalmente. Ligue quando for rodar."
+        if (on) {
+            activateBtn.text = "Desligar Rota Guru"
+            activateBtn.setTextColor(0xFFFF6B6B.toInt())
+            activateBtn.background = rounded(0x1FEF5350, 12, 0x66EF5350)
+        } else {
+            activateBtn.text = "Ligar Rota Guru"
+            styleButton(activateBtn, true)
+        }
+        notifWarn.visibility = if (Notif.canPost(this) && notificationsOn()) View.GONE else View.VISIBLE
     }
 
     private fun sampleRow(name: String, r: Result) {
