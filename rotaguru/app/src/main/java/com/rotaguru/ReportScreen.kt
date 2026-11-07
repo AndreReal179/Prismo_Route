@@ -332,7 +332,7 @@ class ReportScreen(private val act: Activity) {
     }
 
     // ------------------------------------------------------------------ gráfico
-    private class Tier(val name: String, val range: String, val color: Int, val count: Int)
+    private class Tier(val name: String, val range: String, val color: Int, val count: Int, val avg: String?)
 
     private fun chartCard(
         title: String, sub: String,
@@ -357,10 +357,12 @@ class ReportScreen(private val act: Activity) {
         val hi = values.count { it >= high }
         val md = values.count { it >= mid && it < high }
         val lo = n - hi - md
+        // valor médio de cada faixa (ex.: 44% das rotas ficam em torno de R$ 10,00)
+        fun avgOf(f: (Double) -> Boolean) = values.filter(f).takeIf { it.isNotEmpty() }?.average()?.let { "≈ " + fmtAvg(it) }
         val tiers = listOf(
-            Tier("Alto", fmtLimit(high) + " ou mais", GREEN, hi),
-            Tier("Médio", fmtLimit(mid) + " a " + fmtLimit(high), AMBER, md),
-            Tier("Baixo", "abaixo de " + fmtLimit(mid), RED, lo)
+            Tier("Alto", fmtLimit(high) + " ou mais", GREEN, hi, avgOf { it >= high }),
+            Tier("Médio", fmtLimit(mid) + " a " + fmtLimit(high), AMBER, md, avgOf { it >= mid && it < high }),
+            Tier("Baixo", "abaixo de " + fmtLimit(mid), RED, lo, avgOf { it < mid })
         )
         // o mais comum (em empate, o de maior valor)
         val top = tiers.indices.maxByOrNull { tiers[it].count * 10 + (2 - it) } ?: 0
@@ -373,7 +375,7 @@ class ReportScreen(private val act: Activity) {
             colors = intArrayOf(GREEN, AMBER, RED)
             big = "${pct[top]}%"
             bigColor = tiers[top].color
-            small = tiers[top].name.lowercase()
+            small = tiers[top].avg ?: tiers[top].name.lowercase()
             animateIn()
         }
         row.addView(donut, LinearLayout.LayoutParams(dp(124), dp(124)))
@@ -391,7 +393,7 @@ class ReportScreen(private val act: Activity) {
             0 -> "${pct[top]}% $what com ${fmtLimit(high)} ou mais"
             1 -> "${pct[top]}% $what entre ${fmtLimit(mid)} e ${fmtLimit(high)}"
             else -> "${pct[top]}% $what abaixo de ${fmtLimit(mid)}"
-        }
+        } + (t.avg?.let { " (em média ${it.removePrefix("≈ ")})" } ?: "")
         val sp = SpannableStringBuilder(phrase)
         val e = phrase.indexOf('%') + 1
         sp.setSpan(ForegroundColorSpan(t.color), 0, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -447,6 +449,7 @@ class ReportScreen(private val act: Activity) {
         line.addView(names, LinearLayout.LayoutParams(0, WRAP, 1f))
         val right = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END }
         right.addView(tx("$pct%", if (top) 17f else 15f, if (top) t.color else TXT, true).apply { gravity = Gravity.END })
+        if (t.avg != null) right.addView(tx(t.avg, 12f, if (top) t.color else TXT, true).apply { gravity = Gravity.END })
         right.addView(tx("${t.count} rota" + (if (t.count == 1) "" else "s"), 10.5f, MUTED).apply { gravity = Gravity.END })
         line.addView(right)
         col.addView(line)
