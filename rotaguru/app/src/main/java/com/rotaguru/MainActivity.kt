@@ -38,7 +38,7 @@ class MainActivity : Activity() {
     private lateinit var sampleBox: LinearLayout
 
     private enum class Page { HOME, IFOOD, INDRIVE, REPORT, UPDATES, CONFIG }
-    private var page = Page.HOME
+    private var page = Page.REPORT          // o Relatório é a tela inicial
     private var rotasOpen = false
     private var sampleKind = 0            // 0 = sem simulação, 1 = iFood, 2 = InDrive
     private var homeShown = false
@@ -418,12 +418,18 @@ class MainActivity : Activity() {
 
     private fun buildDrawer() {
         drawer.removeAllViews()
-        val head = LinearLayout(this).apply {
+        val names = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), 0, dp(12), dp(14))
             addView(tx("Prismo Route", 22f, GOLD, true))
             addView(tx("Avaliador de corridas · v${Updater.currentName(this@MainActivity)}", 12.5f, MUTED), lp(2))
-            setOnClickListener { navigate(Page.HOME) }
+            setOnClickListener { navigate(Page.REPORT) }
+        }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), 0, dp(4), dp(14))
+            addView(names, LinearLayout.LayoutParams(0, WRAP, 1f))
+            addView(powerButton(), LinearLayout.LayoutParams(dp(42), dp(42)))
         }
         drawer.addView(head, lp())
         drawer.addView(View(this).apply { setBackgroundColor(LINE) }, LinearLayout.LayoutParams(MATCH, dp(1)))
@@ -450,6 +456,31 @@ class MainActivity : Activity() {
         drawer.addView(
             drawerRow("Configurações", page == Page.CONFIG, 0, null) { navigate(Page.CONFIG) }, lp(4)
         )
+        drawer.addView(
+            drawerRow("Ajuda", page == Page.HOME, 0, null) { navigate(Page.HOME) }, lp(4)
+        )
+    }
+
+    /**
+     * Botão liga/desliga ao lado do nome no menu: verde = ligado, vermelho = desligado.
+     * Toque liga ou desliga o serviço na hora.
+     */
+    private fun powerButton(): View {
+        val on = RouteService.running
+        val color = if (on) GREEN else RED
+        return FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor((color and 0x00FFFFFF) or 0x26000000)
+                setStroke(dp(1), (color and 0x00FFFFFF) or 0x8C000000.toInt())
+            }
+            addView(android.widget.ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_power)
+                imageTintList = android.content.res.ColorStateList.valueOf(color)
+            }, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
+            contentDescription = if (on) "Desligar Prismo Route" else "Ligar Prismo Route"
+            setOnClickListener { onPowerClick() }
+        }
     }
 
     private fun navigate(p: Page) {
@@ -463,7 +494,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when {
             drawerOpen -> setDrawer(false)
-            page != Page.HOME -> navigate(Page.HOME)
+            page != Page.REPORT -> navigate(Page.REPORT)
             else -> super.onBackPressed()
         }
     }
@@ -473,7 +504,7 @@ class MainActivity : Activity() {
         sampleKind = 0
         homeShown = false
         when (page) {
-            Page.HOME -> { titleView.text = "Prismo Route"; buildHome() }
+            Page.HOME -> { titleView.text = "Ajuda"; buildHome() }
             Page.IFOOD -> { titleView.text = "iFood"; buildIfood() }
             Page.INDRIVE -> { titleView.text = "InDrive"; buildIndrive() }
             Page.REPORT -> { titleView.text = "Relatório"; report.build(body) }
@@ -901,6 +932,7 @@ class MainActivity : Activity() {
         if (RouteService.running) Notif.show(this)   // garante o aviso fixo na barra
         if (homeShown) updateStatus()
         if (page == Page.REPORT) report.refresh()
+        if (drawerOpen) buildDrawer()                // ícone liga/desliga sempre com o estado real
         if (page == Page.IFOOD || page == Page.INDRIVE) showPage()   // referência do mês sempre atualizada
         refreshSample()
     }
@@ -941,8 +973,8 @@ class MainActivity : Activity() {
             if (Power.turnOn(this)) Toast.makeText(this, "Ligando o Prismo Route…", Toast.LENGTH_SHORT).show()
         }
         val h = Handler(Looper.getMainLooper())
-        h.postDelayed({ if (homeShown) updateStatus() }, 500)
-        h.postDelayed({ if (homeShown) updateStatus() }, 1500)
+        h.postDelayed({ if (homeShown) updateStatus(); if (drawerOpen) buildDrawer() }, 500)
+        h.postDelayed({ if (homeShown) updateStatus(); if (drawerOpen) buildDrawer() }, 1500)
     }
 
     private fun updateStatus() {

@@ -376,30 +376,65 @@ class ReportScreen(private val act: Activity) {
         return Pair(if (r.first.startsWith("=")) "= igual a $vs" else r.first + " vs $vs", r.second)
     }
 
+    /**
+     * Cartões de resumo (2 × 2): selo colorido com ícone, rótulo discreto, valor grande e
+     * a variação para o período anterior numa "pílula" verde/vermelha.
+     */
     private fun kpis(a: S, b: S): View {
         val vs = vsLabel()
         val col = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
-        val r1 = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
-        val r2 = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
-        fun tile(label: String, value: String, sub: Pair<String, Int>) = LinearLayout(act).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = rounded(CARD, 16, LINE)
-            addView(tx(label, 11.5f, MUTED))
-            addView(tx(value, 19f, TXT, true), lp(3))
-            addView(tx(sub.first, 11f, sub.second), lp(3))
+
+        fun tile(icon: String, accent: Int, label: String, value: String, sub: Pair<String, Int>) =
+            LinearLayout(act).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(14), dp(14), dp(14))
+                background = rounded(CARD, 16, LINE)
+                val top = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                top.addView(tx(icon, 11f, accent, true).apply {
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    background = rounded((accent and 0x00FFFFFF) or 0x24000000, 8)
+                }, LinearLayout.LayoutParams(dp(26), dp(26)).apply { rightMargin = dp(8) })
+                top.addView(tx(label.uppercase(BR), 10f, MUTED, true).apply {
+                    letterSpacing = 0.06f
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+                addView(top)
+                addView(tx(value, 21f, TXT, true).apply { maxLines = 1 }, lp(10))
+                // variação em pílula (verde sobe, vermelho desce, cinza igual/sem dados)
+                val pillBg = if (sub.second == MUTED) CARD2 else (sub.second and 0x00FFFFFF) or 0x1F000000
+                addView(LinearLayout(act).apply {
+                    addView(tx(sub.first, 10.5f, sub.second, true).apply {
+                        setPadding(dp(8), dp(3), dp(8), dp(3))
+                        background = rounded(pillBg, 10)
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
+                }, lp(8))
+            }
+
+        fun row(l: View, r: View) = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(l, LinearLayout.LayoutParams(0, MATCH, 1f).apply { rightMargin = dp(5) })
+            addView(r, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = dp(5) })
         }
-        fun add(row: LinearLayout, v: View, left: Boolean) {
-            row.addView(v, LinearLayout.LayoutParams(0, WRAP, 1f).apply {
-                if (left) rightMargin = dp(5) else leftMargin = dp(5)
-            })
+
+        val diffN = a.n - b.n
+        val nSub = when {
+            b.n == 0 && a.n == 0 -> Pair("sem dados $vs", MUTED)
+            diffN == 0 -> Pair("= igual a $vs", MUTED)
+            diffN > 0 -> Pair("▲ $diffN vs $vs", GREEN)
+            else -> Pair("▼ ${-diffN} vs $vs", RED)
         }
-        add(r1, tile("Rotas analisadas", a.n.toString(), Pair("$vs: ${b.n}", MUTED)), true)
-        add(r1, tile("Valor médio", a.price?.let { m2(it) } ?: "—", delta(a.price, b.price, { m2(it) }, vs)), false)
-        add(r2, tile("R$/km médio", a.rpk?.let { m2(it) } ?: "—", delta(a.rpk, b.rpk, { m2(it) }, vs)), true)
-        add(r2, tile("Por pedido (média)", a.per?.let { m2(it) } ?: "—", delta(a.per, b.per, { m2(it) }, vs)), false)
-        col.addView(r1, lp(0))
-        col.addView(r2, lp(10))
+        col.addView(row(
+            tile("✓", GOLD, "Rotas analisadas", a.n.toString(), nSub),
+            tile("R$", GREEN, "Valor médio", a.price?.let { m2(it) } ?: "—", delta(a.price, b.price, { m2(it) }, vs))
+        ), lp(0))
+        col.addView(row(
+            tile("km", 0xFF42A5F5.toInt(), "R$/km médio", a.rpk?.let { m2(it) } ?: "—", delta(a.rpk, b.rpk, { m2(it) }, vs)),
+            tile("▤", 0xFFAB7CFF.toInt(), "Por pedido", a.per?.let { m2(it) } ?: "—", delta(a.per, b.per, { m2(it) }, vs))
+        ), lp(10))
         return col
     }
 
