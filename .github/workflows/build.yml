@@ -1,0 +1,71 @@
+name: Build APK
+
+# Todo push compila o APK.
+# Push na branch principal (main) também PUBLICA um Release com o APK —
+# é esse Release que o app instalado detecta para mostrar a notificação de atualização.
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # necessário para criar o Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rotaguru
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      # Nome da versão: baseVersion (no build.gradle.kts) + quantas versões dela já foram publicadas.
+      # Ex.: baseVersion "3.0" → 3.0.0, 3.0.1, 3.0.2… Build que falha não publica, então não pula número.
+      - name: Calcular versão
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BASE=$(grep -oP 'val baseVersion = "\K[^"]+' app/build.gradle.kts)
+          N=$(gh release list --repo "${{ github.repository }}" --limit 1000 --json tagName \
+                --jq "[.[] | select(.tagName | startswith(\"v$BASE.\"))] | length" 2>/dev/null || echo 0)
+          [ -z "$N" ] && N=0
+          CODE=$((1000 + ${{ github.run_number }}))
+          echo "name=$BASE.$N" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Versão $BASE.$N (código $CODE)"
+
+      - name: Compilar APK
+        run: gradle assembleDebug --no-daemon -PbuildNumber=${{ github.run_number }} -PghRepo=${{ github.repository }} -PappVersionName=${{ steps.ver.outputs.name }}
+
+      - name: Renomear APK
+        run: cp app/build/outputs/apk/debug/*.apk "PrismoRoute-${{ steps.ver.outputs.name }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PrismoRoute-apk
+          path: rotaguru/PrismoRoute-*.apk
+
+      - name: Publicar atualização (Release)
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTAS: ${{ github.event.head_commit.message }}
+          VNAME: ${{ steps.ver.outputs.name }}
+          VCODE: ${{ steps.ver.outputs.code }}
+        run: |
+          TAG="v${VNAME}-b${VCODE}"
+          [ -z "$NOTAS" ] && NOTAS="Nova versão do Prismo Route"
+          gh release create "$TAG" "PrismoRoute-${VNAME}.apk" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Prismo Route ${VNAME}" \
+            --notes "$NOTAS" \
+            --latest
