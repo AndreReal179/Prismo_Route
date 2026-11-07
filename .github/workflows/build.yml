@@ -1,8 +1,14 @@
 name: Build APK
 
+# Todo push compila o APK.
+# Push na branch principal (main) também PUBLICA um Release com o APK —
+# é esse Release que o app instalado detecta para mostrar a notificação de atualização.
 on:
   push:
   workflow_dispatch:
+
+permissions:
+  contents: write   # necessário para criar o Release
 
 jobs:
   build:
@@ -19,9 +25,40 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
-      - name: Compilar APK debug
-        run: gradle assembleDebug --no-daemon
+
+      - name: Calcular versão
+        id: ver
+        run: |
+          BASE=$(grep -oP 'val baseVersion = "\K[^"]+' app/build.gradle.kts)
+          N=${{ github.run_number }}
+          echo "name=$BASE.$N" >> "$GITHUB_OUTPUT"
+          echo "code=$((1000 + N))" >> "$GITHUB_OUTPUT"
+          echo "Versão $BASE.$N (código $((1000 + N)))"
+
+      - name: Compilar APK
+        run: gradle assembleDebug --no-daemon -PbuildNumber=${{ github.run_number }} -PghRepo=${{ github.repository }}
+
+      - name: Renomear APK
+        run: cp app/build/outputs/apk/debug/*.apk "PrismoRoute-${{ steps.ver.outputs.name }}.apk"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: RotaGuru-apk
-          path: rotaguru/app/build/outputs/apk/debug/*.apk
+          name: PrismoRoute-apk
+          path: rotaguru/PrismoRoute-*.apk
+
+      - name: Publicar atualização (Release)
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTAS: ${{ github.event.head_commit.message }}
+          VNAME: ${{ steps.ver.outputs.name }}
+          VCODE: ${{ steps.ver.outputs.code }}
+        run: |
+          TAG="v${VNAME}-b${VCODE}"
+          [ -z "$NOTAS" ] && NOTAS="Nova versão do Prismo Route"
+          gh release create "$TAG" "PrismoRoute-${VNAME}.apk" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Prismo Route ${VNAME}" \
+            --notes "$NOTAS" \
+            --latest
