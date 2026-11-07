@@ -690,6 +690,24 @@ class MainActivity : Activity() {
         cur.addView(tx("Prismo Route · Avaliador de corridas", 13.5f, TXT), lp(2))
         val installed = runCatching { packageManager.getPackageInfo(packageName, 0).lastUpdateTime }.getOrNull()
         if (installed != null) cur.addView(tx("Instalada em ${fmt.format(java.util.Date(installed))}", 12.5f, MUTED), lp(6))
+
+        // novidades desta versão (texto do commit que gerou a versão no GitHub)
+        cur.addView(View(this).apply { setBackgroundColor(LINE) }, LinearLayout.LayoutParams(MATCH, 1).apply { topMargin = dp(14) })
+        cur.addView(tx("NOVIDADES DESTA VERSÃO", 11.5f, MUTED, true).apply { letterSpacing = 0.08f }, lp(12))
+        val notesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cur.addView(notesBox, lp(8))
+        fun paintNotes(n: String?) {
+            notesBox.removeAllViews()
+            when {
+                n == null -> notesBox.addView(tx("Não deu para carregar agora (sem conexão).", 13.5f, MUTED))
+                n.isBlank() -> notesBox.addView(tx("• Melhorias e correções.", 14f, TXT))
+                else -> n.lines().map { it.trim().removePrefix("-").removePrefix("*").removePrefix("•").trim() }
+                    .filter { it.isNotEmpty() }
+                    .forEachIndexed { i, line -> notesBox.addView(tx("• $line", 14f, TXT), lp(if (i == 0) 0 else 4)) }
+            }
+        }
+        notesBox.addView(tx("Carregando…", 13.5f, MUTED))
+        Updater.installedNotesAsync(this) { n -> if (page == Page.UPDATES) paintNotes(n) }
         body.addView(cur, lp(8))
 
         if (!Updater.enabled) {
@@ -749,7 +767,7 @@ class MainActivity : Activity() {
                         status.setTextColor(GREEN)
                         val gh = Updater.lastSeen?.versionName
                         status.text = "✓ Você já está na versão mais nova." +
-                            (if (gh != null) "\nÚltima versão no GitHub: $gh" else "")
+                            (if (gh != null) "\nÚltima versão: $gh" else "")
                     }
                 }
             }

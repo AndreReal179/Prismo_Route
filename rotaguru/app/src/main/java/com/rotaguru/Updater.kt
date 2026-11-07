@@ -157,6 +157,7 @@ object Updater {
             var err = false
             try {
                 val r = fetchLatest()
+                saveNotes(app, r.versionCode, cleanNotes(r.notes))   // já guarda as novidades da versão nova
                 lastSeen = r
                 lastError = null
                 sp.edit().putLong("last_check", now).apply()
@@ -167,6 +168,60 @@ object Updater {
             }
             if (rel != null && notify) showAvailable(app, rel, remind = force)
             main.post { onResult?.invoke(rel, err) }
+        }.start()
+    }
+
+    // ------------------------------------------------------------------ novidades da versão
+
+    /** Mensagens automáticas do GitHub que não dizem nada para o usuário. */
+    private fun cleanNotes(raw: String?): String? {
+        val t = raw?.trim().orEmpty()
+        if (t.isEmpty()) return null
+        val generic = Regex("^(Add files via upload|Update |Delete |Create |Merge |Atualização$|Nova versão do Prismo Route$)", RegexOption.IGNORE_CASE)
+        return if (generic.containsMatchIn(t) && t.lines().size == 1) null else t
+    }
+
+    private fun saveNotes(ctx: Context, code: Int, notes: String?) {
+        if (notes.isNullOrBlank()) return
+        ctx.applicationContext.getSharedPreferences("rotaguru_update", Context.MODE_PRIVATE)
+            .edit().putString("notes_$code", notes).apply()
+    }
+
+    /** Novidades já guardadas desta versão (null = ainda não sabemos). */
+    fun cachedNotes(ctx: Context, code: Int): String? =
+        ctx.applicationContext.getSharedPreferences("rotaguru_update", Context.MODE_PRIVATE).getString("notes_$code", null)
+
+    /**
+     * Busca no GitHub o texto do release da versão instalada (o que foi escrito no commit).
+     * [onResult] na thread principal: texto, "" (versão sem descrição) ou null (sem conexão).
+     */
+    fun installedNotesAsync(ctx: Context, onResult: (String?) -> Unit) {
+        val app = ctx.applicationContext
+        val code = currentCode(app)
+        cachedNotes(app, code)?.let { onResult(it); return }
+        if (!enabled) { onResult(""); return }
+        Thread {
+            var out: String? = null
+            try {
+                val tag = "v${currentName(app)}-b$code"
+                val conn = open("https://api.github.com/repos/$REPO/releases/tags/$tag")
+                conn.setRequestProperty("Accept", "application/vnd.github+json")
+                try {
+                    out = when (conn.responseCode) {
+                        200 -> {
+                            val body = JSONObject(conn.inputStream.bufferedReader().use { it.readText() }).optString("body")
+                            (cleanNotes(body) ?: "").also { if (it.isNotEmpty()) saveNotes(app, code, it) }
+                        }
+                        404 -> ""
+                        else -> null
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (_: Throwable) {
+                out = null
+            }
+            main.post { onResult(out) }
         }.start()
     }
 

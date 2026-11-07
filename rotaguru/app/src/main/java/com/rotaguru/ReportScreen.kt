@@ -127,6 +127,16 @@ class ReportScreen(private val act: Activity) {
         }
     }
 
+    private fun periodLabel() = when (per) {
+        Per.DAY -> "DIA"
+        Per.WEEK -> "SEMANA"
+        Per.MONTH -> "MÊS"
+    } + " · " + when (app) {
+        1 -> "IFOOD"
+        2 -> "INDRIVE"
+        else -> "TODOS OS APPS"
+    }
+
     private fun vsLabel() = when (per) {
         Per.DAY -> "ontem"
         Per.WEEK -> "semana passada"
@@ -156,19 +166,30 @@ class ReportScreen(private val act: Activity) {
         // cabeçalho
         box.addView(tx("Tudo o que o Prismo Route analisou, para você saber quanto as rotas realmente pagam.", 13f, MUTED), lp(0))
 
+        // filtros: período (controle segmentado) + app (chips)
         box.addView(
             segmented(listOf("Dia", "Semana", "Mês"), per.ordinal) { per = Per.values()[it]; render() },
-            lp(14)
+            lp(16)
         )
         box.addView(
-            segmented(listOf("Todos", "iFood", "InDrive"), app, small = true) { app = it; render() },
-            lp(8)
+            appChips(
+                listOf(Triple("Todos", null, 0), Triple("iFood", 0xFFEA1D2C.toInt(), 1), Triple("InDrive", 0xFFB5E61D.toInt(), 2)),
+                app
+            ) { app = it; render() },
+            lp(10)
         )
 
+        // linha do período: título + contador discreto
         val head = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        head.addView(tx(periodTitle(cur), 15f, TXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-        head.addView(chip("${a.size} rota" + (if (a.size == 1) "" else "s"), GOLD, 0xFF1A1300.toInt()))
-        box.addView(head, lp(16))
+        val titleCol = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
+        titleCol.addView(tx(periodLabel(), 10.5f, MUTED, true).apply { letterSpacing = 0.12f })
+        titleCol.addView(tx(periodTitle(cur), 16f, TXT, true), lp(2))
+        head.addView(titleCol, LinearLayout.LayoutParams(0, WRAP, 1f))
+        head.addView(chip("${a.size} rota" + (if (a.size == 1) "" else "s"), CARD2, MUTED).apply {
+            background = rounded(CARD2, 20, LINE)
+        })
+        box.addView(View(act).apply { setBackgroundColor(LINE) }, LinearLayout.LayoutParams(MATCH, 1).apply { topMargin = dp(16) })
+        box.addView(head, lp(14))
 
         if (a.isEmpty()) {
             box.addView(emptyCard(all.isEmpty()), lp(12))
@@ -249,22 +270,73 @@ class ReportScreen(private val act: Activity) {
         background = rounded(bg, 10)
     }
 
-    /** Controle segmentado (Dia | Semana | Mês). */
-    private fun segmented(labels: List<String>, sel: Int, small: Boolean = false, onSel: (Int) -> Unit): LinearLayout {
-        val row = LinearLayout(act).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            background = rounded(CARD, if (small) 12 else 14, LINE)
+    /**
+     * Controle segmentado (Dia | Semana | Mês): trilho escuro e discreto, opção ativa em "pílula"
+     * levemente mais clara com um traço dourado fino embaixo. A pílula desliza ao trocar.
+     */
+    private fun segmented(labels: List<String>, sel: Int, onSel: (Int) -> Unit): View {
+        val track = android.widget.FrameLayout(act).apply {
+            background = rounded(0xFF12151B.toInt(), 12, LINE)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
         }
+        val pill = android.widget.FrameLayout(act).apply {
+            background = rounded(0xFF232834.toInt(), 9, 0x14FFFFFF)
+            elevation = dp(1).toFloat()
+            addView(View(act).apply { background = rounded(GOLD, 2) },
+                android.widget.FrameLayout.LayoutParams(dp(18), dp(2), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                    bottomMargin = dp(4)
+                })
+        }
+        val row = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
         labels.forEachIndexed { i, l ->
             val on = i == sel
-            val t = tx(l, if (small) 12.5f else 14f, if (on) BG else MUTED, true).apply {
+            row.addView(tx(l, 13.5f, if (on) TXT else MUTED, on).apply {
                 gravity = Gravity.CENTER
-                setPadding(0, dp(if (small) 7 else 10), 0, dp(if (small) 7 else 10))
-                if (on) background = rounded(GOLD, if (small) 9 else 11)
-                setOnClickListener { if (!on) onSel(i) }
+                setPadding(0, dp(9), 0, dp(10))
+                setOnClickListener {
+                    if (on) return@setOnClickListener
+                    // desliza a pílula até a opção tocada e só então troca o conteúdo
+                    val w = row.width / labels.size
+                    pill.animate().translationX((w * i).toFloat()).setDuration(160)
+                        .withEndAction { onSel(i) }.start()
+                }
+            }, LinearLayout.LayoutParams(0, WRAP, 1f))
+        }
+        track.addView(pill, android.widget.FrameLayout.LayoutParams(0, MATCH))
+        track.addView(row, android.widget.FrameLayout.LayoutParams(MATCH, WRAP))
+        // a pílula ocupa 1/N da largura; posiciona assim que o layout tiver tamanho
+        row.addOnLayoutChangeListener { v, l, _, r, _, _, _, _, _ ->
+            val w = (r - l) / labels.size
+            val lpP = pill.layoutParams
+            if (lpP.width != w) {
+                lpP.width = w
+                pill.layoutParams = lpP
+                pill.translationX = (w * sel).toFloat()
             }
-            row.addView(t, LinearLayout.LayoutParams(0, WRAP, 1f))
+        }
+        return track
+    }
+
+    /** Filtro de app em chips discretos: contorno fino, ativo com fundo sutil e bolinha da cor do app. */
+    private fun appChips(items: List<Triple<String, Int?, Int>>, sel: Int, onSel: (Int) -> Unit): View {
+        val row = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        items.forEachIndexed { idx, (label, color, value) ->
+            val on = value == sel
+            val chip = LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(7), dp(14), dp(7))
+                background = if (on) rounded(0xFF232834.toInt(), 20, 0x59FFC107) else rounded(0x00000000, 20, LINE)
+                if (color != null) addView(View(act).apply {
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(if (on) color else (color and 0x00FFFFFF) or 0x99000000.toInt())
+                    }
+                }, LinearLayout.LayoutParams(dp(7), dp(7)).apply { rightMargin = dp(7) })
+                addView(tx(label, 12.5f, if (on) TXT else MUTED, on))
+                setOnClickListener { if (!on) onSel(value) }
+            }
+            row.addView(chip, LinearLayout.LayoutParams(WRAP, WRAP).apply { if (idx > 0) leftMargin = dp(8) })
         }
         return row
     }
