@@ -664,6 +664,11 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ configurações
     private fun buildConfig() {
+        val calc = card()
+        calc.addView(title("Cálculo", "Usado quando o app de corridas não mostra o tempo"))
+        calc.addView(field("Velocidade média (km/h)", prefs.avgSpeed) { prefs.avgSpeed = it.coerceIn(5f, 120f) }, lp(12))
+        body.addView(calc, lp(8))
+
         val c = card()
         c.addView(title("Atualizações", "Versão instalada: ${Updater.currentName(this)}"))
         if (!Updater.enabled) {

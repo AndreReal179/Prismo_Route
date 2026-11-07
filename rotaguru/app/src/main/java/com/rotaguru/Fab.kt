@@ -33,7 +33,7 @@ import java.util.Locale
 
 /**
  * Botão flutuante (arrastável). Toque abre o painel de opções rápidas:
- * aceite automático e seus mínimos, velocidade média, abrir o app e Desligar.
+ * aceite automático e seus mínimos, maior valor do dia, abrir o app e Desligar.
  * Usa TYPE_ACCESSIBILITY_OVERLAY (não precisa de "Exibir sobre outros apps").
  */
 class Fab(private val svc: AccessibilityService) {
@@ -560,12 +560,53 @@ class Fab(private val svc: AccessibilityService) {
             addView(toggle(prefs.autoAccept) { prefs.autoAccept = it; dim(it) })
         }
 
-        // ---------- cálculo
-        val calc = group(
-            stepper("Velocidade média", "estima o tempo da corrida",
-                { prefs.avgSpeed }, { prefs.avgSpeed = it }, 5f, 15f, 90f
-            ) { String.format(BR, "%.0f km/h", it) }
-        )
+        // ---------- maior valor do dia (atualiza sozinho enquanto o painel está aberto)
+        val bestValue = label("—", 22f, GOLD, true)
+        val bestInfo = label("", 11.5f, MUTED)
+        val bestCard = LinearLayout(svc).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = rounded(SURFACE, 14f, STROKE)
+            addView(bestValue)
+            addView(bestInfo, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
+        }
+        var shownT = -1L
+        fun paintBest() {
+            val b = runCatching { DayBest.get(svc) }.getOrNull()
+            val key = b?.let { it.t xor java.lang.Double.doubleToLongBits(it.price) } ?: 0L
+            if (key == shownT) return
+            val first = shownT == -1L
+            shownT = key
+            if (b == null) {
+                bestValue.text = "—"
+                bestValue.setTextColor(MUTED)
+                bestInfo.text = "Nenhuma oferta analisada hoje ainda"
+                return
+            }
+            bestValue.setTextColor(GOLD)
+            bestValue.text = String.format(BR, "R$ %.2f", b.price)
+            val parts = ArrayList<String>()
+            parts.add(if (b.route) "iFood" else "InDrive")
+            if (b.route && b.orders > 0) parts.add(if (b.orders == 1) "1 pedido" else "${b.orders} pedidos")
+            b.km?.let { parts.add(String.format(BR, "%.1f km", it)) }
+            b.rpk?.let { parts.add(String.format(BR, "R$ %.2f/km", it)) }
+            parts.add(java.text.SimpleDateFormat("HH:mm", BR).format(java.util.Date(b.t)))
+            bestInfo.text = parts.joinToString(" · ")
+            if (!first) {   // novo recorde: pisca de leve
+                bestValue.scaleX = 1.15f; bestValue.scaleY = 1.15f
+                bestValue.pivotX = 0f
+                bestValue.animate().scaleX(1f).scaleY(1f).setDuration(350).start()
+            }
+        }
+        paintBest()
+        val bestTick = object : Runnable {
+            override fun run() {
+                if (menu == null) return
+                paintBest()
+                handler.postDelayed(this, 1000)
+            }
+        }
 
         // ---------- ações
         val openApp = actionBtn("Abrir app", null, TXT, rounded(SURFACE_HI, 12f, STROKE)) {
@@ -595,8 +636,8 @@ class Fab(private val svc: AccessibilityService) {
             addView(autoRow)
             addView(limits, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-            addView(section("Cálculo"))
-            addView(calc)
+            addView(section("Maior valor de hoje"))
+            addView(bestCard)
             addView(actions, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
             addView(label("Desligue antes de abrir apps de banco.", 10.5f, MUTED).apply {
@@ -651,6 +692,7 @@ class Fab(private val svc: AccessibilityService) {
 
         runCatching { wm.addView(root, lp) }.onSuccess {
             menu = root
+            handler.postDelayed(bestTick, 1000)
             positionMenu()
             panel.alpha = 0f
             panel.scaleX = 0.92f
