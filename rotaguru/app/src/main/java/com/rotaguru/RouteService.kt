@@ -22,6 +22,7 @@ class RouteService : AccessibilityService() {
     private lateinit var prefs: Prefs
     private lateinit var overlay: Overlay
     private lateinit var fab: Fab
+    private lateinit var store: ReportStore
     private var lastPkg = ""
     private val handler = Handler(Looper.getMainLooper())
     private var scheduled = false
@@ -50,6 +51,8 @@ class RouteService : AccessibilityService() {
                 fab.setVisible(rides.isEmpty() || lastPkg in rides)
             } catch (_: Throwable) {
             }
+            // relatório: grava as ofertas que já saíram da tela
+            try { store.flush() } catch (_: Throwable) {}
             handler.postDelayed(this, 900)
         }
     }
@@ -61,6 +64,7 @@ class RouteService : AccessibilityService() {
         prefs = Prefs(this)
         overlay = Overlay(this)
         fab = Fab(this)
+        store = ReportStore(this)
         overlay.onHidden = { fab.update(null) }
         handler.removeCallbacks(tick)
         ticking = false
@@ -76,6 +80,7 @@ class RouteService : AccessibilityService() {
      * acessibilidade do sistema (disableSelf). Com isso os apps de banco voltam a abrir.
      */
     fun shutdown() {
+        if (::store.isInitialized) runCatching { store.flush(true) }   // salva o relatório antes de desligar
         handler.removeCallbacks(tick)
         ticking = false
         if (::overlay.isInitialized) runCatching { overlay.remove() }
@@ -128,6 +133,7 @@ class RouteService : AccessibilityService() {
         }
         root.packageName?.toString()?.let { prefs.addRidePkg(it) }
         val results = offers.map { Evaluator.evaluate(it, prefs) }
+        runCatching { store.observe(results) }   // relatório
         fab.update(Evaluator.best(results))
         runCatching { overlay.show(results) }
         runCatching { maybeAutoAccept(results) }
@@ -178,6 +184,7 @@ class RouteService : AccessibilityService() {
         Notif.cancel(this)
         handler.removeCallbacks(tick)
         ticking = false
+        if (::store.isInitialized) runCatching { store.flush(true) }
         if (::overlay.isInitialized) overlay.remove()
         if (::fab.isInitialized) fab.remove()
         return super.onUnbind(intent)
@@ -188,6 +195,7 @@ class RouteService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        if (::store.isInitialized) runCatching { store.flush(true) }
         handler.removeCallbacks(tick)
         ticking = false
         if (::overlay.isInitialized) overlay.remove()
