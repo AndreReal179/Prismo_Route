@@ -70,29 +70,71 @@ object Updater {
 
     // ------------------------------------------------------------------ consulta ao GitHub
 
-    /** Busca o último release (rede — chamar fora da thread principal). null = sem release/erro. */
-    fun fetchLatest(): Release? {
-        if (!enabled) return null
-        val conn = (URL("https://api.github.com/repos/$REPO/releases/latest").openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 15_000
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("User-Agent", "PrismoRoute-Updater")
-        }
+    /** Última versão vista no GitHub e último erro (para mostrar na aba Atualizações). */
+    @Volatile var lastSeen: Release? = null
+    @Volatile var lastError: String? = null
+
+    private val TAG_RX = Regex("v([0-9.]+)-b(\\d+)$")
+
+    /**
+     * Busca o último release (rede — chamar fora da thread principal).
+     * Tenta a API do GitHub; se falhar (limite de consultas, etc.) usa o link público
+     * github.com/<repo>/releases/latest. Lança exceção com a explicação se nada der certo.
+     */
+    fun fetchLatest(): Release {
+        check(enabled) { "Repositório não configurado" }
+        val apiErr = try {
+            return fetchApi()
+        } catch (t: Throwable) { t.message ?: t.javaClass.simpleName }
         try {
-            if (conn.responseCode != 200) return null
+            return fetchPublic()
+        } catch (t: Throwable) {
+            throw IllegalStateException("GitHub: $apiErr / ${t.message ?: t.javaClass.simpleName}")
+        }
+    }
+
+    private fun open(url: String) = (URL(url).openConnection() as HttpURLConnection).apply {
+        connectTimeout = 15_000
+        readTimeout = 15_000
+        useCaches = false
+        setRequestProperty("Cache-Control", "no-cache")
+        setRequestProperty("User-Agent", "PrismoRoute-Updater")
+    }
+
+    private fun fetchApi(): Release {
+        val conn = open("https://api.github.com/repos/$REPO/releases/latest")
+        conn.setRequestProperty("Accept", "application/vnd.github+json")
+        try {
+            val code = conn.responseCode
+            check(code == 200) { "API respondeu $code" }
             val js = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
             val tag = js.optString("tag_name")
-            val code = Regex("-b(\\d+)$").find(tag)?.groupValues?.get(1)?.toIntOrNull() ?: return null
-            val assets = js.optJSONArray("assets") ?: return null
+            val m = TAG_RX.find(tag) ?: error("tag fora do padrão: $tag")
+            val assets = js.optJSONArray("assets") ?: error("release sem arquivos")
             var url: String? = null
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
                 if (a.optString("name").endsWith(".apk", true)) { url = a.optString("browser_download_url"); break }
             }
-            if (url.isNullOrEmpty()) return null
-            val name = tag.removePrefix("v").substringBefore("-b")
-            return Release(name, code, url, js.optString("body").trim())
+            if (url.isNullOrEmpty()) error("release $tag sem APK")
+            return Release(m.groupValues[1], m.groupValues[2].toInt(), url, js.optString("body").trim())
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Plano B: github.com/<repo>/releases/latest redireciona para .../releases/tag/<tag>. */
+    private fun fetchPublic(): Release {
+        val conn = open("https://github.com/$REPO/releases/latest")
+        conn.instanceFollowRedirects = false
+        try {
+            val code = conn.responseCode
+            val loc = conn.getHeaderField("Location") ?: error("site respondeu $code")
+            val tag = loc.substringAfterLast("/tag/", "").substringBefore('?')
+            val m = TAG_RX.find(tag) ?: error("nenhum release publicado")
+            val name = m.groupValues[1]
+            val url = "https://github.com/$REPO/releases/download/$tag/PrismoRoute-$name.apk"
+            return Release(name, m.groupValues[2].toInt(), url, "")
         } finally {
             conn.disconnect()
         }
@@ -100,7 +142,7 @@ object Updater {
 
     /**
      * Confere se há versão nova. Se houver e [notify] for true, mostra a notificação.
-     * [onResult] roda na thread principal (null = nada novo ou erro; [error] = true se deu erro de rede).
+     * [onResult] roda na thread principal: (versão nova ou null, erro?). Detalhes em [lastSeen]/[lastError].
      */
     fun checkAsync(ctx: Context, notify: Boolean, force: Boolean = false, onResult: ((Release?, Boolean) -> Unit)? = null) {
         val app = ctx.applicationContext
@@ -112,11 +154,14 @@ object Updater {
             var rel: Release? = null
             var err = false
             try {
-                sp.edit().putLong("last_check", now).apply()
                 val r = fetchLatest()
-                if (r != null && r.versionCode > currentCode(app)) rel = r
-            } catch (_: Throwable) {
+                lastSeen = r
+                lastError = null
+                sp.edit().putLong("last_check", now).apply()
+                if (r.versionCode > currentCode(app)) rel = r
+            } catch (t: Throwable) {
                 err = true
+                lastError = t.message ?: t.javaClass.simpleName
             }
             if (rel != null && notify) showAvailable(app, rel)
             main.post { onResult?.invoke(rel, err) }

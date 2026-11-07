@@ -37,7 +37,7 @@ class MainActivity : Activity() {
     private lateinit var notifWarn: LinearLayout
     private lateinit var sampleBox: LinearLayout
 
-    private enum class Page { HOME, IFOOD, INDRIVE, REPORT, CONFIG }
+    private enum class Page { HOME, IFOOD, INDRIVE, REPORT, UPDATES, CONFIG }
     private var page = Page.HOME
     private var rotasOpen = false
     private var sampleKind = 0            // 0 = sem simulação, 1 = iFood, 2 = InDrive
@@ -251,7 +251,7 @@ class MainActivity : Activity() {
 
         // atualização automática pelo GitHub
         Updater.schedule(this)
-        if (!handleUpdateIntent(intent)) Updater.checkAsync(this, notify = true)
+        if (!handleUpdateIntent(intent)) Updater.checkAsync(this, notify = true) { rel, _ -> if (rel != null) newRelease = rel }
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -422,7 +422,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), 0, dp(12), dp(14))
             addView(tx("Prismo Route", 22f, GOLD, true))
-            addView(tx("Avaliador de corridas", 12.5f, MUTED), lp(2))
+            addView(tx("Avaliador de corridas · v${Updater.currentName(this@MainActivity)}", 12.5f, MUTED), lp(2))
             setOnClickListener { navigate(Page.HOME) }
         }
         drawer.addView(head, lp())
@@ -441,6 +441,11 @@ class MainActivity : Activity() {
         }
         drawer.addView(
             drawerRow("Relatório", page == Page.REPORT, 0, null) { navigate(Page.REPORT) }, lp(4)
+        )
+        drawer.addView(
+            drawerRow("Atualizações", page == Page.UPDATES, 0, if (newRelease != null) "● Nova" else null) {
+                navigate(Page.UPDATES)
+            }, lp(4)
         )
         drawer.addView(
             drawerRow("Configurações", page == Page.CONFIG, 0, null) { navigate(Page.CONFIG) }, lp(4)
@@ -472,6 +477,7 @@ class MainActivity : Activity() {
             Page.IFOOD -> { titleView.text = "iFood"; buildIfood() }
             Page.INDRIVE -> { titleView.text = "InDrive"; buildIndrive() }
             Page.REPORT -> { titleView.text = "Relatório"; report.build(body) }
+            Page.UPDATES -> { titleView.text = "Atualizações"; buildUpdates() }
             Page.CONFIG -> { titleView.text = "Configurações"; buildConfig() }
         }
     }
@@ -479,7 +485,7 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ início
     private fun buildHome() {
         val col = body
-        col.addView(tx("Avaliador de corridas em tempo real", 14f, MUTED), lp(0))
+        col.addView(tx("Avaliador de corridas · versão ${Updater.currentName(this)}", 14f, MUTED), lp(0))
 
         val status = card()
         val top = LinearLayout(this).apply {
@@ -669,41 +675,94 @@ class MainActivity : Activity() {
         calc.addView(field("Velocidade média (km/h)", prefs.avgSpeed) { prefs.avgSpeed = it.coerceIn(5f, 120f) }, lp(12))
         body.addView(calc, lp(8))
 
-        val c = card()
-        c.addView(title("Atualizações", "Versão instalada: ${Updater.currentName(this)}"))
+    }
+
+    // ------------------------------------------------------------------ atualizações
+    private var newRelease: Updater.Release? = null      // versão nova encontrada (marca "Nova" no menu)
+
+    private fun buildUpdates() {
+        val fmt = java.text.SimpleDateFormat("dd/MM/yyyy 'às' HH:mm", java.util.Locale("pt", "BR"))
+
+        // versão instalada
+        val cur = card()
+        cur.addView(tx("VERSÃO INSTALADA", 11.5f, MUTED, true))
+        cur.addView(tx(Updater.currentName(this), 30f, GOLD, true), lp(4))
+        cur.addView(tx("Prismo Route · Avaliador de corridas", 13.5f, TXT), lp(2))
+        val installed = runCatching { packageManager.getPackageInfo(packageName, 0).lastUpdateTime }.getOrNull()
+        if (installed != null) cur.addView(tx("Instalada em ${fmt.format(java.util.Date(installed))}", 12.5f, MUTED), lp(6))
+        body.addView(cur, lp(8))
+
         if (!Updater.enabled) {
-            c.addView(tx("Esta cópia foi compilada fora do GitHub, então não sabe onde procurar versões novas.", 13.5f, MUTED), lp(10))
-            body.addView(c, lp(8))
+            val c = card()
+            c.addView(tx("Esta cópia não sabe onde procurar versões novas.", 13.5f, MUTED))
+            body.addView(c, lp(12))
             return
         }
-        c.addView(tx("O app confere sozinho a cada poucas horas e avisa com uma notificação quando sai versão nova. Tocou, ele baixa e instala por cima, sem perder suas configurações.", 13.5f, MUTED), lp(10))
+
+        // verificação
+        val chk = card()
+        chk.addView(title("Procurar atualização", "O app também confere sozinho a cada poucas horas e avisa por notificação"))
         val status = tx("", 13.5f, MUTED)
+        val lastLine = tx("", 12f, MUTED)
+        val result = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun paintLast() {
+            val t = getSharedPreferences("rotaguru_update", MODE_PRIVATE).getLong("last_check", 0)
+            lastLine.text = if (t > 0) "Última verificação: ${fmt.format(java.util.Date(t))}" else ""
+        }
+        fun showRelease(rel: Updater.Release) {
+            result.removeAllViews()
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = rounded(0x1F4CAF50, 12, 0x664CAF50)
+                setPadding(dp(14), dp(12), dp(14), dp(14))
+            }
+            box.addView(tx("Nova versão ${rel.versionName}", 17f, GREEN, true))
+            if (rel.notes.isNotEmpty()) box.addView(tx(rel.notes.take(800), 13.5f, TXT), lp(6))
+            box.addView(button("Atualizar agora", true) { startUpdate(rel.apkUrl, rel.versionName) }, lp(12))
+            result.addView(box)
+        }
         lateinit var btn: TextView
-        btn = button("Verificar agora", true) {
+        fun check() {
             btn.isEnabled = false
+            btn.alpha = 0.6f
             status.setTextColor(MUTED)
             status.text = "Procurando…"
             Updater.checkAsync(this, notify = false, force = true) { rel, err ->
+                if (page != Page.UPDATES) return@checkAsync
                 btn.isEnabled = true
+                btn.alpha = 1f
+                paintLast()
                 when {
                     rel != null -> {
+                        newRelease = rel
                         status.setTextColor(GREEN)
-                        status.text = "Versão ${rel.versionName} disponível!"
-                        AlertDialog.Builder(this)
-                            .setTitle("Nova versão ${rel.versionName}")
-                            .setMessage(if (rel.notes.isNotEmpty()) rel.notes.take(800) else "Quer atualizar agora?")
-                            .setPositiveButton("Atualizar") { _, _ -> startUpdate(rel.apkUrl, rel.versionName) }
-                            .setNegativeButton("Depois", null)
-                            .show()
+                        status.text = "Tem atualização disponível!"
+                        showRelease(rel)
                     }
-                    err -> { status.setTextColor(AMBER); status.text = "Sem conexão com o GitHub. Tente de novo." }
-                    else -> { status.setTextColor(MUTED); status.text = "Você já está na versão mais nova." }
+                    err -> {
+                        status.setTextColor(AMBER)
+                        status.text = "Não consegui consultar o GitHub. Confira a internet e tente de novo.\n(${Updater.lastError ?: "erro"})"
+                    }
+                    else -> {
+                        newRelease = null
+                        result.removeAllViews()
+                        status.setTextColor(GREEN)
+                        val gh = Updater.lastSeen?.versionName
+                        status.text = "✓ Você já está na versão mais nova." +
+                            (if (gh != null) "\nÚltima versão no GitHub: $gh" else "")
+                    }
                 }
             }
         }
-        c.addView(btn, lp(14))
-        c.addView(status, lp(10))
-        body.addView(c, lp(8))
+        btn = button("Verificar atualização", true) { check() }
+        chk.addView(btn, lp(14))
+        chk.addView(status, lp(10))
+        chk.addView(lastLine, lp(4))
+        chk.addView(result, lp(12))
+        body.addView(chk, lp(12))
+        paintLast()
+        newRelease?.let { showRelease(it); status.setTextColor(GREEN); status.text = "Tem atualização disponível!" }
+        check()   // já confere ao abrir a aba
     }
 
     // ------------------------------------------------------------------ status
