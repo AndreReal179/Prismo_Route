@@ -118,6 +118,45 @@ class RouteService : AccessibilityService() {
         }, 200)
     }
 
+    /**
+     * Todas as janelas onde pode haver oferta: a ativa primeiro e depois as outras janelas de app
+     * (o popup de rota que chega por notificação às vezes abre numa janela que não é a "ativa").
+     */
+    private fun candidateRoots(): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        rootInActiveWindow?.let { if (it.packageName != packageName) out.add(it) }
+        runCatching {
+            for (w in windows) {
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val rr = w.root ?: continue
+                if (rr.packageName == packageName) continue
+                if (out.any { it.windowId == rr.windowId }) continue
+                out.add(rr)
+            }
+        }
+        return out
+    }
+
+    // nº de pedidos já lido para cada oferta (às vezes a leitura seguinte enxerga menos itens)
+    private val stopMemo = HashMap<String, Triple<Int, Int, Long>>()
+
+    /** Mantém o maior nº de coletas/entregas já visto para a mesma oferta (mesmo valor + km). */
+    private fun keepStops(o: Offer) {
+        if (!o.route) return
+        val key = "${Math.round(o.price * 100)}|${o.tripKm?.let { Math.round(it * 10) }}"
+        val now = SystemClock.uptimeMillis()
+        val old = stopMemo[key]
+        if (old != null && now - old.third < 10 * 60_000L) {
+            if (old.first > o.coletas || old.second > o.entregas) {
+                o.coletas = maxOf(o.coletas, old.first)
+                o.entregas = maxOf(o.entregas, old.second)
+                o.stops = Parser.stopsText(o.coletas, o.entregas)
+            }
+        }
+        stopMemo[key] = Triple(o.coletas, o.entregas, now)
+        if (stopMemo.size > 300) stopMemo.entries.removeAll { now - it.value.third > 10 * 60_000L }
+    }
+
     /** Janela ativa; se o sistema não entregar, procura entre as janelas de aplicativo. */
     private fun findRoot(): AccessibilityNodeInfo? {
         val r = rootInActiveWindow
@@ -135,17 +174,23 @@ class RouteService : AccessibilityService() {
 
     private fun scan() {
         if (!running) return
-        val root = runCatching { findRoot() }.getOrNull()
-        if (root == null) {            // app minimizado / sem janela: some com os cards
+        val roots = runCatching { candidateRoots() }.getOrDefault(emptyList())
+        if (roots.isEmpty()) {         // app minimizado / sem janela: some com os cards
             overlay.hideSoon()
             return
         }
-        val offers = runCatching { Parser.parse(root) }.getOrDefault(emptyList())
-        if (offers.isEmpty()) {
+        var root: AccessibilityNodeInfo? = null
+        var offers: List<Offer> = emptyList()
+        for (r in roots) {
+            val o = runCatching { Parser.parse(r) }.getOrDefault(emptyList())
+            if (o.isNotEmpty()) { root = r; offers = o; break }
+        }
+        if (root == null || offers.isEmpty()) {
             overlay.hideSoon()
             return
         }
         root.packageName?.toString()?.let { prefs.addRidePkg(it) }
+        offers.forEach { runCatching { keepStops(it) } }
         val results = offers.map { Evaluator.evaluate(it, prefs) }
         runCatching { store.observe(results) }   // relatório
         runCatching { RouteAlert.onResults(this, results) }   // som + vibração a cada rota nova

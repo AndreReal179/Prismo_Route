@@ -24,9 +24,11 @@ class Offer(
     val headTop: Int? = null,
     val headBottom: Int? = null,  // y (tela) da base da linha "R$ x/km" do card, p/ posicionar o selo
     val route: Boolean = false,   // true = card de "Rotas disponíveis" (coletas + entregas)
-    val stops: String? = null,    // ex.: "2 coletas · 3 entregas"
-    val coletas: Int = 0,         // nº de coletas (lojas) da rota
-    val entregas: Int = 0         // nº de entregas = nº de pedidos
+    var stops: String? = null,    // ex.: "2 coletas · 3 entregas"
+    var coletas: Int = 0,         // nº de coletas (lojas) da rota
+    var entregas: Int = 0,        // nº de entregas = nº de pedidos
+    val placeTop: Int? = null,    // painel começa neste y (lista: em cima do endereço da coleta)
+    val placeAbove: Int? = null   // painel termina logo acima deste y (detalhe/popup: acima do card do valor)
 )
 
 class Result(

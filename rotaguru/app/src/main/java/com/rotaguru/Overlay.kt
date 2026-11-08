@@ -60,7 +60,8 @@ class Overlay(private val svc: AccessibilityService) {
         last = results
         // não redesenha se nada mudou (evita piscar com a releitura periódica)
         val sig = results.joinToString("|") {
-            "${it.offer.price}/${it.offer.headTop}/${it.effRpk}/${it.offer.pickupKm}/${it.offer.rating}"
+            "${it.offer.price}/${it.offer.headTop}/${it.offer.placeTop}/${it.offer.placeAbove}/${it.effRpk}/" +
+                "${it.offer.pickupKm}/${it.offer.rating}/${it.offer.entregas}"
         } + expanded
         if (sig == lastSig && isShowing) return
         lastSig = sig
@@ -132,18 +133,29 @@ class Overlay(private val svc: AccessibilityService) {
             val route = r.offer.route
             val p = if (route) routePanel(r, r === best && multi) else panel(r, r === best && multi)
             val w = if (route) svc.resources.displayMetrics.widthPixels - dp(40) else width
+            val above = r.offer.placeAbove
             val lp = FrameLayout.LayoutParams(w, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.START).apply {
                 leftMargin = if (route) dp(20) else dp(66)
-                topMargin = (r.offer.headTop ?: 0) - dp(3)
+                topMargin = when {
+                    above != null -> above                                // ajustado depois de medir (abaixo)
+                    r.offer.placeTop != null -> r.offer.placeTop - dp(2)  // em cima do endereço da coleta
+                    else -> (r.offer.headTop ?: 0) - dp(3)
+                }
             }
+            // detalhe/popup: o painel termina logo acima do valor (no vão acima do card do valor)
+            p.tag = if (above != null) "above" else null
             f.addView(p, lp)
         }
         // corrige a diferença entre coordenadas da tela e da janela (barra de status etc.)
         f.post {
             val loc = IntArray(2)
             f.getLocationOnScreen(loc)
-            for (i in 0 until f.childCount) f.getChildAt(i).translationY = -loc[1].toFloat()
+            for (i in 0 until f.childCount) {
+                val c = f.getChildAt(i)
+                val lift = if (c.tag == "above") c.height + dp(26) else 0
+                c.translationY = (-loc[1] - lift).toFloat()
+            }
         }
     }
 
